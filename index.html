@@ -1,0 +1,1581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fun Pay - Educational Payment App</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        .screen {
+            display: none;
+        }
+        .screen.active {
+            display: block;
+        }
+        .phone-container {
+            max-width: 480px;
+            margin: 0 auto;
+            min-height: 100vh;
+            position: relative;
+        }
+        .bottom-nav {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            max-width: 480px;
+            margin: 0 auto;
+        }
+        .notification-badge {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            background-color: #ef4444;
+            color: white;
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+        }
+        .transaction-item {
+            transition: all 0.2s ease;
+        }
+        .transaction-item:hover {
+            background-color: #f9fafb;
+        }
+        .fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+        .debit-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 16px;
+            padding: 20px;
+            color: white;
+            position: relative;
+            overflow: hidden;
+        }
+        .debit-card::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+        }
+        .chip {
+            width: 40px;
+            height: 30px;
+            background: linear-gradient(135deg, #ffd700 0%, #ffed4e 100%);
+            border-radius: 4px;
+            position: relative;
+        }
+        .pin-input {
+            letter-spacing: 8px;
+            text-align: center;
+            font-size: 24px;
+        }
+        .success-animation {
+            animation: successPulse 1.5s ease-in-out;
+        }
+        @keyframes successPulse {
+            0% { transform: scale(0.8); opacity: 0; }
+            50% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .big-amount {
+            font-size: 3rem;
+            font-weight: bold;
+            line-height: 1;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-storage-compat.js"></script>
+
+    <script>
+        // Firebase configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyD_jqTqBlb2Dk-muoOCGKU9eQbeQvNFKWY",
+            authDomain: "fun-pay-a2cf0.firebaseapp.com",
+            databaseURL: "https://fun-pay-a2cf0-default-rtdb.firebaseio.com",
+            projectId: "fun-pay-a2cf0",
+            storageBucket: "fun-pay-a2cf0.firebasestorage.app",
+            messagingSenderId: "238563276663",
+            appId: "1:238563276663:web:313b1cf7f5bd6dbd075372"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const database = firebase.database();
+        const storage = firebase.storage();
+
+        // App state
+        let currentUser = null;
+        let appSettings = {
+            bankName: "Children Bank of India",
+            defaultProfileIcon: "https://picsum.photos/seed/default/200/200.jpg",
+            userInviteCode: "FUNUSER2024"
+        };
+        
+        // Store last transaction for receipt
+        let lastTransaction = null;
+
+        // Initialize app
+        document.addEventListener('DOMContentLoaded', function() {
+            // Check if user is logged in
+            auth.onAuthStateChanged(function(user) {
+                if (user) {
+                    currentUser = user;
+                    loadUserData(user.uid);
+                    showScreen('home');
+                } else {
+                    showScreen('welcome');
+                }
+            });
+
+            // Load app settings
+            database.ref('settings').once('value').then(snapshot => {
+                if (snapshot.exists()) {
+                    appSettings = { ...appSettings, ...snapshot.val() };
+                    updateBankName();
+                }
+            });
+        });
+
+        // Generate unique account number
+        function generateAccountNumber() {
+            return 'FP' + Math.random().toString(36).substr(2, 9).toUpperCase();
+        }
+
+        // Load user data
+        function loadUserData(uid) {
+            database.ref('users/' + uid).once('value').then(snapshot => {
+                if (snapshot.exists()) {
+                    const userData = snapshot.val();
+                    document.getElementById('userBalance').textContent = '₹' + userData.balance.toFixed(2);
+                    document.getElementById('userName').textContent = userData.displayName || 'User';
+                    document.getElementById('profileName').textContent = userData.displayName || 'User';
+                    document.getElementById('profileEmail').textContent = userData.email;
+                    document.getElementById('cardHolderName').textContent = userData.displayName || 'USER';
+                    document.getElementById('cardNumber').textContent = formatCardNumber(userData.accountNumber);
+                    document.getElementById('cardExpiry').textContent = userData.expiryDate || '12/28';
+                    
+                    if (userData.profileIcon) {
+                        document.getElementById('profileIcon').src = userData.profileIcon;
+                        document.getElementById('homeProfileIcon').src = userData.profileIcon;
+                    }
+                }
+            });
+
+            // Load transactions
+            loadTransactions(uid);
+            
+            // Load notifications
+            loadNotifications(uid);
+        }
+
+        // Format card number
+        function formatCardNumber(number) {
+            return number.replace(/(\w{4})(\w{4})(\w{4})(\w{4})/, '$1 $2 $3 $4');
+        }
+
+        // Load transactions
+        function loadTransactions(uid) {
+            const transactionsRef = database.ref('transactions/' + uid);
+            transactionsRef.orderByChild('timestamp').limitToLast(10).on('value', snapshot => {
+                const transactionsList = document.getElementById('transactionsList');
+                transactionsList.innerHTML = '';
+                
+                if (snapshot.exists()) {
+                    const transactions = snapshot.val();
+                    Object.keys(transactions).reverse().forEach(key => {
+                        const transaction = transactions[key];
+                        const transactionEl = createTransactionElement(transaction);
+                        transactionsList.appendChild(transactionEl);
+                    });
+                } else {
+                    transactionsList.innerHTML = '<p class="text-gray-500 text-center py-4">No transactions yet</p>';
+                }
+            });
+        }
+
+        // Create transaction element
+        function createTransactionElement(transaction) {
+            const div = document.createElement('div');
+            div.className = 'transaction-item p-3 border-b border-gray-100 cursor-pointer fade-in';
+            div.onclick = () => showTransactionDetails(transaction);
+            
+            const isCredit = transaction.type === 'credit' || transaction.type === 'request';
+            const icon = isCredit ? 'fa-arrow-down text-green-500' : 'fa-arrow-up text-red-500';
+            const name = transaction.from === currentUser.displayName ? 'To: ' + transaction.to : 'From: ' + transaction.from;
+            
+            div.innerHTML = `
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center">
+                        <div class="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center mr-3">
+                            <i class="fas ${icon}"></i>
+                        </div>
+                        <div>
+                            <p class="font-medium text-sm">${name}</p>
+                            <p class="text-xs text-gray-500">${transaction.note || 'Payment'}</p>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <p class="font-medium ${isCredit ? 'text-green-500' : 'text-red-500'}">
+                            ${isCredit ? '+' : '-'}₹${transaction.amount.toFixed(2)}
+                        </p>
+                        <p class="text-xs text-gray-500">${formatDate(transaction.timestamp)}</p>
+                    </div>
+                </div>
+            `;
+            
+            return div;
+        }
+
+        // Load notifications
+        function loadNotifications(uid) {
+            const notificationsRef = database.ref('notifications/' + uid);
+            notificationsRef.orderByChild('timestamp').limitToLast(10).on('value', snapshot => {
+                const notificationsList = document.getElementById('notificationsList');
+                notificationsList.innerHTML = '';
+                
+                if (snapshot.exists()) {
+                    const notifications = snapshot.val();
+                    Object.keys(notifications).reverse().forEach(key => {
+                        const notification = notifications[key];
+                        const notificationEl = createNotificationElement(notification);
+                        notificationsList.appendChild(notificationEl);
+                    });
+                } else {
+                    notificationsList.innerHTML = '<p class="text-gray-500 text-center py-4">No notifications</p>';
+                }
+            });
+        }
+
+        // Create notification element
+        function createNotificationElement(notification) {
+            const div = document.createElement('div');
+            div.className = 'p-3 border-b border-gray-100 fade-in';
+            
+            div.innerHTML = `
+                <div class="flex items-start">
+                    <div class="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center mr-3 flex-shrink-0">
+                        <i class="fas fa-bell text-blue-500 text-xs"></i>
+                    </div>
+                    <div class="flex-1">
+                        <p class="text-sm font-medium">${notification.title}</p>
+                        <p class="text-xs text-gray-600 mt-1">${notification.message}</p>
+                        <p class="text-xs text-gray-400 mt-1">${formatDate(notification.timestamp)}</p>
+                    </div>
+                </div>
+            `;
+            
+            return div;
+        }
+
+        // Show screen
+        function showScreen(screenId) {
+            document.querySelectorAll('.screen').forEach(screen => {
+                screen.classList.remove('active');
+            });
+            document.getElementById(screenId).classList.add('active');
+            
+            // Update navigation
+            document.querySelectorAll('.nav-btn').forEach(btn => {
+                btn.classList.remove('text-blue-600');
+                btn.classList.add('text-gray-500');
+            });
+            
+            if (screenId === 'home') {
+                document.getElementById('homeNavBtn').classList.add('text-blue-600');
+                document.getElementById('homeNavBtn').classList.remove('text-gray-500');
+            } else if (screenId === 'history') {
+                document.getElementById('historyNavBtn').classList.add('text-blue-600');
+                document.getElementById('historyNavBtn').classList.remove('text-gray-500');
+            } else if (screenId === 'profile') {
+                document.getElementById('profileNavBtn').classList.add('text-blue-600');
+                document.getElementById('profileNavBtn').classList.remove('text-gray-500');
+            }
+        }
+
+        // Sign up user
+        function signUpUser() {
+            const email = document.getElementById('signupEmail').value;
+            const password = document.getElementById('signupPassword').value;
+            const displayName = document.getElementById('signupName').value;
+            const inviteCode = document.getElementById('signupInviteCode').value;
+            const pin = document.getElementById('signupPin').value;
+            const confirmPin = document.getElementById('signupConfirmPin').value;
+            
+            if (!email || !password || !displayName || !inviteCode || !pin) {
+                alert('Please fill all fields');
+                return;
+            }
+            
+            if (inviteCode !== appSettings.userInviteCode) {
+                alert('Invalid invite code');
+                return;
+            }
+            
+            if (pin.length !== 4 || pin !== confirmPin) {
+                alert('PIN must be 4 digits and match');
+                return;
+            }
+            
+            auth.createUserWithEmailAndPassword(email, password)
+                .then(userCredential => {
+                    const user = userCredential.user;
+                    const accountNumber = generateAccountNumber();
+                    const expiryDate = '12/' + (new Date().getFullYear() + 5).toString().substr(2);
+                    
+                    // Create user in database
+                    database.ref('users/' + user.uid).set({
+                        uid: user.uid,
+                        email: email,
+                        displayName: displayName,
+                        accountNumber: accountNumber,
+                        pin: pin,
+                        expiryDate: expiryDate,
+                        balance: 1000, // Starting balance
+                        profileIcon: appSettings.defaultProfileIcon,
+                        createdAt: Date.now()
+                    });
+                    
+                    // Send welcome notification
+                    database.ref('notifications/' + user.uid).push({
+                        title: 'Welcome to Fun Pay!',
+                        message: `Your account ${accountNumber} has been created with ₹1000 starting balance.`,
+                        timestamp: Date.now()
+                    });
+                    
+                    return user.updateProfile({ displayName: displayName });
+                })
+                .catch(error => {
+                    alert(error.message);
+                });
+        }
+
+        // Sign in
+        function signIn() {
+            const email = document.getElementById('signinEmail').value;
+            const password = document.getElementById('signinPassword').value;
+            const accountNumber = document.getElementById('signinAccountNumber').value;
+            
+            if (!email || !password || !accountNumber) {
+                alert('Please fill all fields');
+                return;
+            }
+            
+            auth.signInWithEmailAndPassword(email, password)
+                .then(userCredential => {
+                    // Verify account number
+                    return database.ref('users/' + userCredential.user.uid).once('value');
+                })
+                .then(snapshot => {
+                    if (snapshot.exists() && snapshot.val().accountNumber === accountNumber) {
+                        // Valid login
+                    } else {
+                        throw new Error('Invalid account number');
+                    }
+                })
+                .catch(error => {
+                    alert(error.message);
+                    auth.signOut();
+                });
+        }
+
+        // Sign out
+        function signOut() {
+            auth.signOut();
+        }
+
+        // Verify PIN for transactions
+        function verifyPin(callback) {
+            const pin = prompt('Enter your 4-digit PIN:');
+            if (pin && pin.length === 4) {
+                database.ref('users/' + currentUser.uid + '/pin').once('value').then(snapshot => {
+                    if (snapshot.val() === pin) {
+                        callback();
+                    } else {
+                        alert('Invalid PIN');
+                    }
+                });
+            }
+        }
+
+        // Send money
+        function sendMoney() {
+            const recipient = document.getElementById('recipient').value;
+            const amount = parseFloat(document.getElementById('amount').value);
+            const note = document.getElementById('note').value;
+            
+            if (!recipient || !amount || amount <= 0) {
+                alert('Please fill all fields with valid values');
+                return;
+            }
+            
+            verifyPin(() => {
+                // Get current user balance
+                database.ref('users/' + currentUser.uid).once('value').then(snapshot => {
+                    const userData = snapshot.val();
+                    
+                    if (userData.balance < amount) {
+                        alert('Insufficient balance');
+                        return;
+                    }
+                    
+                    // Find recipient by account number or email
+                    database.ref('users').orderByChild('accountNumber').equalTo(recipient).once('value').then(recipientSnapshot => {
+                        if (!recipientSnapshot.exists()) {
+                            database.ref('users').orderByChild('email').equalTo(recipient).once('value').then(emailSnapshot => {
+                                if (!emailSnapshot.exists()) {
+                                    alert('Recipient not found');
+                                    return;
+                                }
+                                processTransaction(emailSnapshot.val(), amount, note, userData);
+                            });
+                        } else {
+                            processTransaction(recipientSnapshot.val(), amount, note, userData);
+                        }
+                    });
+                });
+            });
+        }
+
+        // Process transaction
+        function processTransaction(recipientData, amount, note, senderData) {
+            const recipientId = Object.keys(recipientData)[0];
+            const recipient = recipientData[recipientId];
+            
+            // Update balances
+            const updates = {};
+            updates['users/' + currentUser.uid + '/balance'] = senderData.balance - amount;
+            updates['users/' + recipientId + '/balance'] = recipient.balance + amount;
+            
+            // Add transactions
+            const transactionData = {
+                from: senderData.displayName,
+                to: recipient.displayName,
+                amount: amount,
+                note: note,
+                timestamp: Date.now(),
+                type: 'debit'
+            };
+            
+            updates['transactions/' + currentUser.uid + '/' + Date.now()] = transactionData;
+            
+            const creditTransaction = { ...transactionData, type: 'credit' };
+            updates['transactions/' + recipientId + '/' + Date.now()] = creditTransaction;
+            
+            // Send notification to recipient
+            updates['notifications/' + recipientId + '/' + Date.now()] = {
+                title: 'Money Received',
+                message: `${senderData.displayName} sent you ₹${amount.toFixed(2)}`,
+                timestamp: Date.now()
+            };
+            
+            // Store transaction for receipt
+            lastTransaction = {
+                ...transactionData,
+                senderAccountNumber: senderData.accountNumber,
+                recipientAccountNumber: recipient.accountNumber,
+                transactionId: 'TXN' + Date.now()
+            };
+            
+            // Update database
+            database.ref().update(updates).then(() => {
+                // Clear form
+                document.getElementById('recipient').value = '';
+                document.getElementById('amount').value = '';
+                document.getElementById('note').value = '';
+                
+                // Show success screen
+                showPaymentSuccess();
+            });
+        }
+
+        // Show payment success screen
+        function showPaymentSuccess() {
+            if (!lastTransaction) return;
+            
+            // Update success screen with transaction details
+            document.getElementById('successRecipient').textContent = lastTransaction.to;
+            document.getElementById('successAmount').textContent = '₹' + lastTransaction.amount.toFixed(2);
+            document.getElementById('successNote').textContent = lastTransaction.note || 'Payment';
+            document.getElementById('successDate').textContent = formatDate(lastTransaction.timestamp);
+            document.getElementById('successTransactionId').textContent = lastTransaction.transactionId;
+            
+            // Show the screen with animation
+            showScreen('paymentSuccess');
+            
+            // Add animation class
+            const successIcon = document.getElementById('successIcon');
+            successIcon.classList.add('success-animation');
+            
+            // Remove animation class after animation completes
+            setTimeout(() => {
+                successIcon.classList.remove('success-animation');
+            }, 1500);
+        }
+
+        // Share transaction
+        function shareTransaction() {
+            if (!lastTransaction) return;
+            
+            const shareText = `Payment Successful!\n\nPaid: ₹${lastTransaction.amount.toFixed(2)}\nTo: ${lastTransaction.to}\nNote: ${lastTransaction.note || 'Payment'}\nDate: ${formatDate(lastTransaction.timestamp)}\nTransaction ID: ${lastTransaction.transactionId}\n\nSent via Fun Pay - Educational Payment App`;
+            
+            if (navigator.share) {
+                navigator.share({
+                    title: 'Fun Pay - Payment Successful',
+                    text: shareText
+                }).catch(err => console.log('Error sharing:', err));
+            } else {
+                // Fallback - copy to clipboard
+                navigator.clipboard.writeText(shareText).then(() => {
+                    alert('Transaction details copied to clipboard!');
+                }).catch(err => {
+                    console.error('Could not copy text: ', err);
+                    alert('Unable to share. Please try again.');
+                });
+            }
+        }
+
+        // Download PDF receipt
+        function downloadPDFReceipt() {
+            if (!lastTransaction) return;
+            
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            
+            // Add logo/header
+            doc.setFontSize(20);
+            doc.setTextColor(66, 133, 244); // Blue color
+            doc.text('Fun Pay', 105, 20, { align: 'center' });
+            
+            doc.setFontSize(12);
+            doc.setTextColor(100);
+            doc.text('Educational Payment Platform', 105, 27, { align: 'center' });
+            
+            // Add receipt title
+            doc.setFontSize(16);
+            doc.setTextColor(0);
+            doc.text('Payment Receipt', 105, 40, { align: 'center' });
+            
+            // Add transaction details
+            doc.setFontSize(12);
+            doc.text('Transaction Details', 20, 55);
+            
+            doc.setFontSize(10);
+            doc.text(`Transaction ID: ${lastTransaction.transactionId}`, 20, 65);
+            doc.text(`Date: ${formatDate(lastTransaction.timestamp)}`, 20, 72);
+            doc.text(`Status: Successful`, 20, 79);
+            
+            // Add payment details
+            doc.setFontSize(12);
+            doc.text('Payment Details', 20, 95);
+            
+            doc.setFontSize(10);
+            doc.text(`From: ${lastTransaction.from}`, 20, 105);
+            doc.text(`To: ${lastTransaction.to}`, 20, 112);
+            doc.text(`Amount: ₹${lastTransaction.amount.toFixed(2)}`, 20, 119);
+            doc.text(`Note: ${lastTransaction.note || 'Payment'}`, 20, 126);
+            
+            // Add footer
+            doc.setFontSize(8);
+            doc.setTextColor(150);
+            doc.text('This is an educational receipt. No real money was involved.', 105, 280, { align: 'center' });
+            doc.text('© 2023 Fun Pay - Educational Platform', 105, 285, { align: 'center' });
+            
+            // Save the PDF
+            doc.save(`FunPay_Receipt_${lastTransaction.transactionId}.pdf`);
+        }
+
+        // Request money
+        function requestMoney() {
+            const recipient = document.getElementById('requestRecipient').value;
+            const amount = parseFloat(document.getElementById('requestAmount').value);
+            const note = document.getElementById('requestNote').value;
+            
+            if (!recipient || !amount || amount <= 0) {
+                alert('Please fill all fields with valid values');
+                return;
+            }
+            
+            // Find recipient
+            database.ref('users').orderByChild('accountNumber').equalTo(recipient).once('value').then(recipientSnapshot => {
+                if (!recipientSnapshot.exists()) {
+                    database.ref('users').orderByChild('email').equalTo(recipient).once('value').then(emailSnapshot => {
+                        if (!emailSnapshot.exists()) {
+                            alert('Recipient not found');
+                            return;
+                        }
+                        processRequest(emailSnapshot.val(), amount, note);
+                    });
+                } else {
+                    processRequest(recipientSnapshot.val(), amount, note);
+                }
+            });
+        }
+
+        // Process request
+        function processRequest(recipientData, amount, note) {
+            const recipientId = Object.keys(recipientData)[0];
+            const recipient = recipientData[recipientId];
+            
+            // Send notification to recipient
+            database.ref('notifications/' + recipientId).push({
+                title: 'Money Request',
+                message: `${currentUser.displayName} requested ₹${amount.toFixed(2)}`,
+                timestamp: Date.now(),
+                requestId: Date.now(),
+                requestFrom: currentUser.uid,
+                amount: amount,
+                note: note
+            });
+            
+            alert('Request sent successfully!');
+            document.getElementById('requestRecipient').value = '';
+            document.getElementById('requestAmount').value = '';
+            document.getElementById('requestNote').value = '';
+            showScreen('home');
+        }
+
+        // Upload profile picture
+        function uploadProfilePicture() {
+            const file = document.getElementById('profilePictureInput').files[0];
+            
+            if (!file) return;
+            
+            const storageRef = storage.ref('profilePictures/' + currentUser.uid);
+            const uploadTask = storageRef.put(file);
+            
+            uploadTask.on('state_changed', 
+                (snapshot) => {
+                    // Progress indicator
+                    const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                    console.log('Upload is ' + progress + '% done');
+                },
+                (error) => {
+                    alert(error.message);
+                },
+                () => {
+                    // Get download URL
+                    uploadTask.snapshot.ref.getDownloadURL().then((downloadURL) => {
+                        // Update user profile
+                        database.ref('users/' + currentUser.uid + '/profileIcon').set(downloadURL);
+                        document.getElementById('profileIcon').src = downloadURL;
+                        document.getElementById('homeProfileIcon').src = downloadURL;
+                    });
+                }
+            );
+        }
+
+        // Show transaction details
+        function showTransactionDetails(transaction) {
+            document.getElementById('detailFrom').textContent = transaction.from;
+            document.getElementById('detailTo').textContent = transaction.to;
+            document.getElementById('detailAmount').textContent = '₹' + transaction.amount.toFixed(2);
+            document.getElementById('detailNote').textContent = transaction.note || 'No note';
+            document.getElementById('detailDate').textContent = formatDate(transaction.timestamp);
+            document.getElementById('detailType').textContent = transaction.type === 'credit' ? 'Received' : 'Sent';
+            document.getElementById('detailType').className = transaction.type === 'credit' ? 'text-green-500' : 'text-red-500';
+            
+            showScreen('transactionDetails');
+        }
+
+        // Change PIN
+        function changePin() {
+            const currentPin = document.getElementById('currentPin').value;
+            const newPin = document.getElementById('newPin').value;
+            const confirmPin = document.getElementById('confirmNewPin').value;
+            
+            if (!currentPin || !newPin || !confirmPin) {
+                alert('Please fill all fields');
+                return;
+            }
+            
+            if (newPin.length !== 4) {
+                alert('New PIN must be 4 digits');
+                return;
+            }
+            
+            if (newPin !== confirmPin) {
+                alert('New PIN and confirmation do not match');
+                return;
+            }
+            
+            // Verify current PIN
+            database.ref('users/' + currentUser.uid + '/pin').once('value').then(snapshot => {
+                if (snapshot.val() === currentPin) {
+                    // Update PIN
+                    database.ref('users/' + currentUser.uid + '/pin').set(newPin).then(() => {
+                        alert('PIN changed successfully!');
+                        document.getElementById('currentPin').value = '';
+                        document.getElementById('newPin').value = '';
+                        document.getElementById('confirmNewPin').value = '';
+                        showScreen('profile');
+                    });
+                } else {
+                    alert('Current PIN is incorrect');
+                }
+            });
+        }
+
+        // Update bank name in UI
+        function updateBankName() {
+            document.getElementById('bankName').textContent = appSettings.bankName;
+            document.getElementById('homeBankName').textContent = appSettings.bankName;
+        }
+
+        // Utility functions
+        function formatDate(timestamp) {
+            const date = new Date(timestamp);
+            return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+    </script>
+
+    <!-- Welcome/Onboarding Screen -->
+    <div id="welcome" class="screen active">
+        <div class="phone-container bg-white">
+            <div class="flex flex-col items-center justify-center min-h-screen p-6">
+                <div class="mb-8 text-center">
+                    <div class="w-24 h-24 bg-blue-500 rounded-full flex items-center justify-center mx-auto mb-4 pulse">
+                        <i class="fas fa-wallet text-white text-4xl"></i>
+                    </div>
+                    <h1 class="text-3xl font-bold text-gray-800 mb-2">Fun Pay</h1>
+                    <p class="text-gray-600">Learn how digital payments work</p>
+                </div>
+                
+                <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6 w-full">
+                    <h3 class="font-semibold text-yellow-800 mb-2">
+                        <i class="fas fa-exclamation-triangle mr-2"></i>Educational Disclaimer
+                    </h3>
+                    <p class="text-sm text-yellow-700 mb-3">
+                        This is an educational app that simulates payment transactions. No real money is involved. 
+                        This app is not affiliated with any bank or financial institution and is not approved by any app store.
+                    </p>
+                    <label class="flex items-center">
+                        <input type="checkbox" id="disclaimerCheck" class="mr-2">
+                        <span class="text-sm text-yellow-700">I understand this is for educational purposes only</span>
+                    </label>
+                </div>
+                
+                <div class="w-full space-y-3">
+                    <button onclick="showScreen('signup')" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition disabled:bg-gray-300" id="proceedBtn" disabled>
+                        User Sign Up
+                    </button>
+                    <button onclick="showScreen('signin')" class="w-full bg-gray-200 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-300 transition">
+                        User Sign In
+                    </button>
+                </div>
+                
+                <div class="mt-6 p-3 bg-blue-50 rounded-lg">
+                    <p class="text-xs text-blue-700 text-center">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        User Invite Code: <span class="font-mono font-bold">FUNUSER2024</span>
+                    </p>
+                </div>
+                
+                <div class="mt-6 text-center">
+                    <p class="text-xs text-gray-500">© 2023 Fun Pay - Educational Platform</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Sign Up Screen -->
+    <div id="signup" class="screen">
+        <div class="phone-container bg-white">
+            <div class="flex flex-col items-center justify-center min-h-screen p-6">
+                <div class="mb-8 text-center">
+                    <div class="w-20 h-20 bg-blue-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <i class="fas fa-user-plus text-white text-3xl"></i>
+                    </div>
+                    <h2 class="text-2xl font-bold text-gray-800">Create Account</h2>
+                    <p class="text-gray-600 mt-1">Join Fun Pay to learn about payments</p>
+                </div>
+                
+                <div class="w-full space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+                        <input type="text" id="signupName" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter your name">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                        <input type="email" id="signupEmail" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter your email">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                        <input type="password" id="signupPassword" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Create a password">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">4-Digit PIN</label>
+                        <input type="password" id="signupPin" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 pin-input" placeholder="••••" maxlength="4">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Confirm PIN</label>
+                        <input type="password" id="signupConfirmPin" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 pin-input" placeholder="••••" maxlength="4">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Invite Code</label>
+                        <input type="text" id="signupInviteCode" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="FUNUSER2024">
+                    </div>
+                    
+                    <button onclick="signUpUser()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
+                        Sign Up
+                    </button>
+                    
+                    <div class="text-center">
+                        <p class="text-sm text-gray-600">
+                            Already have an account? 
+                            <a href="#" onclick="showScreen('signin')" class="text-blue-500 hover:underline">Sign In</a>
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sign In Screen -->
+    <div id="signin" class="screen">
+        <div class="phone-container bg-white">
+            <div class="flex flex-col items-center justify-center min-h-screen p-6">
+                <div class="mb-8 text-center">
+                    <div class="w-20 h-20 bg-blue-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <i class="fas fa-sign-in-alt text-white text-3xl"></i>
+                    </div>
+                    <h2 class="text-2xl font-bold text-gray-800">Welcome Back</h2>
+                    <p class="text-gray-600 mt-1">Sign in to continue learning</p>
+                </div>
+                
+                <div class="w-full space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                        <input type="email" id="signinEmail" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter your email">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Account Number</label>
+                        <input type="text" id="signinAccountNumber" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="FPXXXXXXXXX">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                        <input type="password" id="signinPassword" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter your password">
+                    </div>
+                    
+                    <button onclick="signIn()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
+                        Sign In
+                    </button>
+                    
+                    <div class="text-center">
+                        <p class="text-sm text-gray-600">
+                            Don't have an account? 
+                            <a href="#" onclick="showScreen('signup')" class="text-blue-500 hover:underline">Sign Up</a>
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Home/Dashboard Screen -->
+    <div id="home" class="screen">
+        <div class="phone-container bg-gray-50 pb-20">
+            <!-- Header -->
+            <div class="bg-gradient-to-r from-blue-500 to-blue-600 text-white p-6 rounded-b-3xl shadow-lg">
+                <div class="flex justify-between items-center mb-4">
+                    <div>
+                        <p class="text-sm opacity-90">Good morning,</p>
+                        <h2 class="text-xl font-bold" id="userName">User</h2>
+                    </div>
+                    <div class="relative">
+                        <img id="homeProfileIcon" src="https://picsum.photos/seed/user/200/200.jpg" class="w-12 h-12 rounded-full border-2 border-white">
+                        <div class="absolute bottom-0 right-0 w-4 h-4 bg-green-400 rounded-full border-2 border-white"></div>
+                    </div>
+                </div>
+                
+                <div class="bg-white/20 backdrop-blur rounded-xl p-4">
+                    <p class="text-sm opacity-90" id="homeBankName">Children Bank of India</p>
+                    <p class="text-3xl font-bold mt-1" id="userBalance">₹0.00</p>
+                    <p class="text-xs opacity-75 mt-1">Available Balance</p>
+                </div>
+            </div>
+            
+            <!-- Quick Actions -->
+            <div class="px-6 mt-6">
+                <div class="grid grid-cols-4 gap-4">
+                    <button onclick="showScreen('send')" class="flex flex-col items-center p-3 bg-white rounded-xl shadow-sm hover:shadow-md transition">
+                        <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mb-2">
+                            <i class="fas fa-paper-plane text-blue-500"></i>
+                        </div>
+                        <span class="text-xs text-gray-700">Send</span>
+                    </button>
+                    
+                    <button onclick="showScreen('request')" class="flex flex-col items-center p-3 bg-white rounded-xl shadow-sm hover:shadow-md transition">
+                        <div class="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mb-2">
+                            <i class="fas fa-hand-holding-usd text-green-500"></i>
+                        </div>
+                        <span class="text-xs text-gray-700">Request</span>
+                    </button>
+                    
+                    <button onclick="showScreen('notifications')" class="flex flex-col items-center p-3 bg-white rounded-xl shadow-sm hover:shadow-md transition relative">
+                        <div class="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center mb-2">
+                            <i class="fas fa-bell text-orange-500"></i>
+                        </div>
+                        <span class="text-xs text-gray-700">Alerts</span>
+                        <div class="notification-badge">3</div>
+                    </button>
+                    
+                    <button onclick="showScreen('profile')" class="flex flex-col items-center p-3 bg-white rounded-xl shadow-sm hover:shadow-md transition">
+                        <div class="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center mb-2">
+                            <i class="fas fa-credit-card text-purple-500"></i>
+                        </div>
+                        <span class="text-xs text-gray-700">Card</span>
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Recent Transactions -->
+            <div class="px-6 mt-6">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="font-semibold text-gray-800">Recent Transactions</h3>
+                    <button onclick="showScreen('history')" class="text-blue-500 text-sm hover:underline">View All</button>
+                </div>
+                
+                <div class="bg-white rounded-xl shadow-sm" id="transactionsList">
+                    <p class="text-gray-500 text-center py-4">No transactions yet</p>
+                </div>
+            </div>
+            
+            <!-- Educational Banner -->
+            <div class="px-6 mt-6">
+                <div class="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                    <p class="text-xs text-blue-700">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        Remember: This is an educational app. No real money is involved.
+                    </p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Bottom Navigation -->
+        <div class="bottom-nav bg-white border-t border-gray-200">
+            <div class="grid grid-cols-4 py-2">
+                <button onclick="showScreen('home')" class="nav-btn flex flex-col items-center py-2 text-blue-600" id="homeNavBtn">
+                    <i class="fas fa-home text-xl mb-1"></i>
+                    <span class="text-xs">Home</span>
+                </button>
+                
+                <button onclick="showScreen('history')" class="nav-btn flex flex-col items-center py-2 text-gray-500" id="historyNavBtn">
+                    <i class="fas fa-history text-xl mb-1"></i>
+                    <span class="text-xs">History</span>
+                </button>
+                
+                <button onclick="showScreen('profile')" class="nav-btn flex flex-col items-center py-2 text-gray-500" id="profileNavBtn">
+                    <i class="fas fa-user text-xl mb-1"></i>
+                    <span class="text-xs">Profile</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Send Money Screen -->
+    <div id="send" class="screen">
+        <div class="phone-container bg-white min-h-screen">
+            <div class="bg-blue-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('home')" class="mr-3">
+                    <i class="fas fa-arrow-left text-xl"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Send Money</h2>
+            </div>
+            
+            <div class="p-6">
+                <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-6">
+                    <p class="text-xs text-yellow-700">
+                        <i class="fas fa-exclamation-triangle mr-1"></i>
+                        This is a simulated transaction for educational purposes only.
+                    </p>
+                </div>
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Recipient (Account Number or Email)</label>
+                        <input type="text" id="recipient" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter account number or email">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Amount (₹)</label>
+                        <input type="number" id="amount" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="0.00">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Note (Optional)</label>
+                        <input type="text" id="note" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="What's this for?">
+                    </div>
+                    
+                    <button onclick="sendMoney()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
+                        Send Money
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Payment Success Screen -->
+    <div id="paymentSuccess" class="screen">
+        <div class="phone-container bg-white min-h-screen">
+            <div class="bg-gradient-to-r from-green-500 to-green-600 text-white p-6">
+                <div class="text-center">
+                    <div id="successIcon" class="w-20 h-20 bg-white rounded-full flex items-center justify-center mx-auto mb-4">
+                        <i class="fas fa-check text-green-500 text-4xl"></i>
+                    </div>
+                    <h2 class="text-2xl font-bold">Payment Successful</h2>
+                </div>
+            </div>
+            
+            <div class="p-6">
+                <div class="text-center mb-6">
+                    <p class="text-gray-600 mb-2">Payment sent to</p>
+                    <h3 class="text-xl font-semibold" id="successRecipient">Recipient Name</h3>
+                </div>
+                
+                <div class="text-center mb-6">
+                    <p class="big-amount text-green-500" id="successAmount">₹0.00</p>
+                </div>
+                
+                <div class="bg-gray-50 rounded-lg p-4 mb-6">
+                    <div class="flex justify-between mb-2">
+                        <span class="text-gray-600">Transaction ID</span>
+                        <span class="font-medium" id="successTransactionId">TXN123456789</span>
+                    </div>
+                    <div class="flex justify-between mb-2">
+                        <span class="text-gray-600">Date & Time</span>
+                        <span class="font-medium" id="successDate">Jan 1, 2023 12:00 PM</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">Note</span>
+                        <span class="font-medium" id="successNote">Payment</span>
+                    </div>
+                </div>
+                
+                <div class="grid grid-cols-2 gap-4 mb-6">
+                    <button onclick="shareTransaction()" class="bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition flex items-center justify-center">
+                        <i class="fas fa-share-alt mr-2"></i>
+                        Share
+                    </button>
+                    <button onclick="downloadPDFReceipt()" class="bg-purple-500 text-white py-3 rounded-lg font-medium hover:bg-purple-600 transition flex items-center justify-center">
+                        <i class="fas fa-download mr-2"></i>
+                        Download PDF
+                    </button>
+                </div>
+                
+                <button onclick="showScreen('home')" class="w-full bg-gray-200 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-300 transition">
+                    Back to Home
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Request Money Screen -->
+    <div id="request" class="screen">
+        <div class="phone-container bg-white min-h-screen">
+            <div class="bg-green-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('home')" class="mr-3">
+                    <i class="fas fa-arrow-left text-xl"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Request Money</h2>
+            </div>
+            
+            <div class="p-6">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">From (Account Number or Email)</label>
+                        <input type="text" id="requestRecipient" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="Enter account number or email">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Amount (₹)</label>
+                        <input type="number" id="requestAmount" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="0.00">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Note (Optional)</label>
+                        <input type="text" id="requestNote" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="What's this for?">
+                    </div>
+                    
+                    <button onclick="requestMoney()" class="w-full bg-green-500 text-white py-3 rounded-lg font-medium hover:bg-green-600 transition">
+                        Send Request
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Transaction History Screen -->
+    <div id="history" class="screen">
+        <div class="phone-container bg-gray-50 min-h-screen pb-20">
+            <div class="bg-white p-4 shadow-sm">
+                <h2 class="text-xl font-semibold text-gray-800">Transaction History</h2>
+            </div>
+            
+            <div class="p-4">
+                <div class="bg-white rounded-xl shadow-sm" id="historyList">
+                    <!-- Transactions will be loaded here -->
+                </div>
+            </div>
+        </div>
+        
+        <!-- Bottom Navigation -->
+        <div class="bottom-nav bg-white border-t border-gray-200">
+            <div class="grid grid-cols-4 py-2">
+                <button onclick="showScreen('home')" class="nav-btn flex flex-col items-center py-2 text-gray-500" id="homeNavBtn">
+                    <i class="fas fa-home text-xl mb-1"></i>
+                    <span class="text-xs">Home</span>
+                </button>
+                
+                <button onclick="showScreen('history')" class="nav-btn flex flex-col items-center py-2 text-blue-600" id="historyNavBtn">
+                    <i class="fas fa-history text-xl mb-1"></i>
+                    <span class="text-xs">History</span>
+                </button>
+                
+                <button onclick="showScreen('profile')" class="nav-btn flex flex-col items-center py-2 text-gray-500" id="profileNavBtn">
+                    <i class="fas fa-user text-xl mb-1"></i>
+                    <span class="text-xs">Profile</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Transaction Details Screen -->
+    <div id="transactionDetails" class="screen">
+        <div class="phone-container bg-white min-h-screen">
+            <div class="bg-blue-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('history')" class="mr-3">
+                    <i class="fas fa-arrow-left text-xl"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Transaction Details</h2>
+            </div>
+            
+            <div class="p-6">
+                <div class="bg-gray-50 rounded-xl p-6 mb-4">
+                    <div class="text-center mb-4">
+                        <p class="text-sm text-gray-500 mb-1">Transaction Type</p>
+                        <p class="text-lg font-semibold" id="detailType">Sent</p>
+                    </div>
+                    
+                    <div class="text-center mb-4">
+                        <p class="text-3xl font-bold" id="detailAmount">₹0.00</p>
+                    </div>
+                    
+                    <div class="border-t border-gray-200 pt-4 space-y-3">
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">From</span>
+                            <span class="font-medium" id="detailFrom">-</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">To</span>
+                            <span class="font-medium" id="detailTo">-</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">Note</span>
+                            <span class="font-medium" id="detailNote">-</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">Date & Time</span>
+                            <span class="font-medium" id="detailDate">-</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                    <p class="text-xs text-yellow-700">
+                        <i class="fas fa-exclamation-triangle mr-1"></i>
+                        This is a simulated transaction for educational purposes only.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Profile/Settings Screen -->
+    <div id="profile" class="screen">
+        <div class="phone-container bg-gray-50 min-h-screen pb-20">
+            <div class="bg-gradient-to-r from-blue-500 to-blue-600 text-white p-6">
+                <div class="flex items-center">
+                    <img id="profileIcon" src="https://picsum.photos/seed/user/200/200.jpg" class="w-20 h-20 rounded-full border-3 border-white mr-4">
+                    <div>
+                        <h2 class="text-xl font-bold" id="profileName">User</h2>
+                        <p class="text-sm opacity-90" id="profileEmail">user@example.com</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Debit Card -->
+            <div class="px-4 -mt-8">
+                <div class="debit-card shadow-xl">
+                    <div class="flex justify-between items-start mb-4">
+                        <div>
+                            <p class="text-xs opacity-75">Current Balance</p>
+                            <p class="text-2xl font-bold" id="userBalance">₹0.00</p>
+                        </div>
+                        <div class="chip"></div>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <p class="text-xs opacity-75 mb-1">Card Number</p>
+                        <p class="text-lg font-mono tracking-wider" id="cardNumber">FP•••• •••• •••• ••••</p>
+                    </div>
+                    
+                    <div class="flex justify-between items-end">
+                        <div>
+                            <p class="text-xs opacity-75 mb-1">Card Holder</p>
+                            <p class="font-semibold" id="cardHolderName">USER NAME</p>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-xs opacity-75 mb-1">Valid Thru</p>
+                            <p class="font-semibold" id="cardExpiry">12/28</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="p-4 space-y-4">
+                <div class="bg-white rounded-xl shadow-sm p-4">
+                    <h3 class="font-semibold text-gray-800 mb-3">Account Settings</h3>
+                    
+                    <div class="space-y-3">
+                        <button onclick="document.getElementById('profilePictureInput').click()" class="w-full flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg transition">
+                            <div class="flex items-center">
+                                <i class="fas fa-camera text-blue-500 mr-3"></i>
+                                <span>Change Profile Picture</span>
+                            </div>
+                            <i class="fas fa-chevron-right text-gray-400"></i>
+                        </button>
+                        <input type="file" id="profilePictureInput" accept="image/*" onchange="uploadProfilePicture()" style="display: none;">
+                        
+                        <button onclick="showScreen('changePin')" class="w-full flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg transition">
+                            <div class="flex items-center">
+                                <i class="fas fa-lock text-blue-500 mr-3"></i>
+                                <span>Change PIN</span>
+                            </div>
+                            <i class="fas fa-chevron-right text-gray-400"></i>
+                        </button>
+                        
+                        <button onclick="showScreen('notifications')" class="w-full flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg transition">
+                            <div class="flex items-center">
+                                <i class="fas fa-bell text-blue-500 mr-3"></i>
+                                <span>Notifications</span>
+                            </div>
+                            <i class="fas fa-chevron-right text-gray-400"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-xl shadow-sm p-4">
+                    <h3 class="font-semibold text-gray-800 mb-3">About</h3>
+                    
+                    <div class="space-y-3">
+                        <button onclick="showScreen('terms')" class="w-full flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg transition">
+                            <div class="flex items-center">
+                                <i class="fas fa-info-circle text-blue-500 mr-3"></i>
+                                <span>Terms & Conditions</span>
+                            </div>
+                            <i class="fas fa-chevron-right text-gray-400"></i>
+                        </button>
+                        
+                        <button onclick="showScreen('support')" class="w-full flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg transition">
+                            <div class="flex items-center">
+                                <i class="fas fa-question-circle text-blue-500 mr-3"></i>
+                                <span>Help & Support</span>
+                            </div>
+                            <i class="fas fa-chevron-right text-gray-400"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-xl shadow-sm p-4">
+                    <h3 class="font-semibold text-gray-800 mb-3">Educational Disclaimer</h3>
+                    <p class="text-sm text-gray-600 mb-3">
+                        Fun Pay is an educational app that simulates payment transactions. No real money is involved. 
+                        This app is not affiliated with any bank or financial institution.
+                    </p>
+                    <p class="text-xs text-gray-500">
+                        Version 1.0.0 | Educational Platform
+                    </p>
+                </div>
+                
+                <button onclick="signOut()" class="w-full bg-red-500 text-white py-3 rounded-lg font-medium hover:bg-red-600 transition">
+                    Sign Out
+                </button>
+            </div>
+        </div>
+        
+        <!-- Bottom Navigation -->
+        <div class="bottom-nav bg-white border-t border-gray-200">
+            <div class="grid grid-cols-4 py-2">
+                <button onclick="showScreen('home')" class="nav-btn flex flex-col items-center py-2 text-gray-500" id="homeNavBtn">
+                    <i class="fas fa-home text-xl mb-1"></i>
+                    <span class="text-xs">Home</span>
+                </button>
+                
+                <button onclick="showScreen('history')" class="nav-btn flex flex-col items-center py-2 text-gray-500" id="historyNavBtn">
+                    <i class="fas fa-history text-xl mb-1"></i>
+                    <span class="text-xs">History</span>
+                </button>
+                
+                <button onclick="showScreen('profile')" class="nav-btn flex flex-col items-center py-2 text-blue-600" id="profileNavBtn">
+                    <i class="fas fa-user text-xl mb-1"></i>
+                    <span class="text-xs">Profile</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Change PIN Screen -->
+    <div id="changePin" class="screen">
+        <div class="phone-container bg-white min-h-screen">
+            <div class="bg-blue-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('profile')" class="mr-3">
+                    <i class="fas fa-arrow-left text-xl"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Change PIN</h2>
+            </div>
+            
+            <div class="p-6">
+                <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                    <p class="text-sm text-blue-700">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        For security reasons, please enter your current PIN and then create a new 4-digit PIN.
+                    </p>
+                </div>
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Current PIN</label>
+                        <input type="password" id="currentPin" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 pin-input" placeholder="••••" maxlength="4">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">New PIN</label>
+                        <input type="password" id="newPin" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 pin-input" placeholder="••••" maxlength="4">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Confirm New PIN</label>
+                        <input type="password" id="confirmNewPin" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 pin-input" placeholder="••••" maxlength="4">
+                    </div>
+                    
+                    <button onclick="changePin()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
+                        Update PIN
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notifications Screen -->
+    <div id="notifications" class="screen">
+        <div class="phone-container bg-white min-h-screen">
+            <div class="bg-blue-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('profile')" class="mr-3">
+                    <i class="fas fa-arrow-left text-xl"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Notifications</h2>
+            </div>
+            
+            <div class="p-4">
+                <div id="notificationsList">
+                    <p class="text-gray-500 text-center py-4">No notifications</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Terms & Conditions Screen -->
+    <div id="terms" class="screen">
+        <div class="phone-container bg-white min-h-screen">
+            <div class="bg-blue-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('profile')" class="mr-3">
+                    <i class="fas fa-arrow-left text-xl"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Terms & Conditions</h2>
+            </div>
+            
+            <div class="p-6">
+                <div class="space-y-4">
+                    <div>
+                        <h3 class="font-semibold text-gray-800 mb-2">1. Educational Purpose Only</h3>
+                        <p class="text-sm text-gray-600">
+                            Fun Pay is an educational platform designed to teach users about digital payment systems. 
+                            All transactions are simulated and no real money is involved.
+                        </p>
+                    </div>
+                    
+                    <div>
+                        <h3 class="font-semibold text-gray-800 mb-2">2. Account Responsibility</h3>
+                        <p class="text-sm text-gray-600">
+                            Users are responsible for maintaining the confidentiality of their account credentials, 
+                            including their PIN. Sharing account details is strictly prohibited.
+                        </p>
+                    </div>
+                    
+                    <div>
+                        <h3 class="font-semibold text-gray-800 mb-2">3. Platform Usage</h3>
+                        <p class="text-sm text-gray-600">
+                            The platform should be used for educational purposes only. Any misuse, including attempts 
+                            to manipulate the system for personal gain, may result in account suspension.
+                        </p>
+                    </div>
+                    
+                    <div>
+                        <h3 class="font-semibold text-gray-800 mb-2">4. Data Privacy</h3>
+                        <p class="text-sm text-gray-600">
+                            User data is collected for educational purposes and is not shared with third parties. 
+                            The platform does not store any financial information as no real transactions occur.
+                        </p>
+                    </div>
+                    
+                    <div>
+                        <h3 class="font-semibold text-gray-800 mb-2">5. Platform Availability</h3>
+                        <p class="text-sm text-gray-600">
+                            Fun Pay is provided "as is" for educational purposes. The service may be temporarily 
+                            unavailable for maintenance or updates without prior notice.
+                        </p>
+                    </div>
+                    
+                    <div>
+                        <h3 class="font-semibold text-gray-800 mb-2">6. Age Restriction</h3>
+                        <p class="text-sm text-gray-600">
+                            Users under the age of 13 should not use this platform without parental supervision. 
+                            The platform is designed primarily for educational use by teenagers and young adults.
+                        </p>
+                    </div>
+                    
+                    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mt-6">
+                        <p class="text-xs text-yellow-700">
+                            <i class="fas fa-exclamation-triangle mr-1"></i>
+                            By using Fun Pay, you acknowledge that this is an educational platform and not a real financial service.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Help & Support Screen -->
+    <div id="support" class="screen">
+        <div class="phone-container bg-white min-h-screen">
+            <div class="bg-blue-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('profile')" class="mr-3">
+                    <i class="fas fa-arrow-left text-xl"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Help & Support</h2>
+            </div>
+            
+            <div class="p-6">
+                <div class="space-y-4">
+                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <h3 class="font-semibold text-blue-800 mb-2">Contact Support</h3>
+                        <p class="text-sm text-blue-700 mb-3">
+                            For any issues or questions about Fun Pay, please contact our support team:
+                        </p>
+                        <div class="flex items-center">
+                            <i class="fas fa-envelope text-blue-500 mr-3"></i>
+                            <a href="mailto:nboy13031@gmail.com" class="text-blue-600 hover:underline">nboy13031@gmail.com</a>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <h3 class="font-semibold text-gray-800 mb-2">Frequently Asked Questions</h3>
+                        
+                        <div class="space-y-3">
+                            <div class="border border-gray-200 rounded-lg p-3">
+                                <h4 class="font-medium text-gray-700 mb-1">How do I reset my PIN?</h4>
+                                <p class="text-sm text-gray-600">
+                                    Go to Profile > Change PIN. You'll need to enter your current PIN to set a new one.
+                                </p>
+                            </div>
+                            
+                            <div class="border border-gray-200 rounded-lg p-3">
+                                <h4 class="font-medium text-gray-700 mb-1">Is my money real?</h4>
+                                <p class="text-sm text-gray-600">
+                                    No, all money in Fun Pay is virtual and for educational purposes only.
+                                </p>
+                            </div>
+                            
+                            <div class="border border-gray-200 rounded-lg p-3">
+                                <h4 class="font-medium text-gray-700 mb-1">How do I find my account number?</h4>
+                                <p class="text-sm text-gray-600">
+                                    Your account number is displayed on your virtual debit card in the Profile section.
+                                </p>
+                            </div>
+                            
+                            <div class="border border-gray-200 rounded-lg p-3">
+                                <h4 class="font-medium text-gray-700 mb-1">Can I add real money?</h4>
+                                <p class="text-sm text-gray-600">
+                                    No, real money cannot be added. Only administrators can adjust balances for educational purposes.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <h3 class="font-semibold text-gray-800 mb-2">Report an Issue</h3>
+                        <p class="text-sm text-gray-600 mb-3">
+                            If you're experiencing technical issues or have found a bug, please email us with:
+                        </p>
+                        <ul class="text-sm text-gray-600 list-disc list-inside space-y-1">
+                            <li>Description of the issue</li>
+                            <li>Steps to reproduce the problem</li>
+                            <li>Screenshots if applicable</li>
+                            <li>Your account email</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Enable proceed button after checking disclaimer
+        document.getElementById('disclaimerCheck').addEventListener('change', function() {
+            document.getElementById('proceedBtn').disabled = !this.checked;
+        });
+
+        // Load history when history screen is shown
+        document.getElementById('historyNavBtn').addEventListener('click', function() {
+            const historyList = document.getElementById('historyList');
+            historyList.innerHTML = document.getElementById('transactionsList').innerHTML;
+        });
+    </script>
+</body>
+</html>
