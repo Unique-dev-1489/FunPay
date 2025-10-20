@@ -105,6 +105,19 @@
             font-weight: bold;
             line-height: 1;
         }
+        .success-message {
+            background-color: #f0fdf4;
+            border-left: 4px solid #22c55e;
+            padding: 10px 15px;
+            margin-top: 15px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+        }
+        .success-message i {
+            color: #22c55e;
+            margin-right: 10px;
+        }
     </style>
 </head>
 <body class="bg-gray-50">
@@ -117,15 +130,14 @@
     <script>
         // Firebase configuration
         const firebaseConfig = {
-            apiKey: "AIzaSyD_jqTqBlb2Dk-muoOCGKU9eQbeQvNFKWY",
-            authDomain: "fun-pay-a2cf0.firebaseapp.com",
-            databaseURL: "https://fun-pay-a2cf0-default-rtdb.firebaseio.com",
-            projectId: "fun-pay-a2cf0",
-            storageBucket: "fun-pay-a2cf0.firebasestorage.app",
-            messagingSenderId: "238563276663",
-            appId: "1:238563276663:web:313b1cf7f5bd6dbd075372"
-        };
-
+  apiKey: "AIzaSyD_jqTqBlb2Dk-muoOCGKU9eQbeQvNFKWY",
+  authDomain: "fun-pay-a2cf0.firebaseapp.com",
+  databaseURL: "https://fun-pay-a2cf0-default-rtdb.firebaseio.com",
+  projectId: "fun-pay-a2cf0",
+  storageBucket: "fun-pay-a2cf0.firebasestorage.app",
+  messagingSenderId: "238563276663",
+  appId: "1:238563276663:web:313b1cf7f5bd6dbd075372"
+};
         // Initialize Firebase
         firebase.initializeApp(firebaseConfig);
         const auth = firebase.auth();
@@ -182,6 +194,9 @@
                     document.getElementById('cardHolderName').textContent = userData.displayName || 'USER';
                     document.getElementById('cardNumber').textContent = formatCardNumber(userData.accountNumber);
                     document.getElementById('cardExpiry').textContent = userData.expiryDate || '12/28';
+                    
+                    // Update card balance
+                    document.getElementById('cardBalance').textContent = '₹' + userData.balance.toFixed(2);
                     
                     if (userData.profileIcon) {
                         document.getElementById('profileIcon').src = userData.profileIcon;
@@ -475,8 +490,12 @@
             updates['users/' + currentUser.uid + '/balance'] = senderData.balance - amount;
             updates['users/' + recipientId + '/balance'] = recipient.balance + amount;
             
+            // Generate transaction ID
+            const transactionId = 'TXN' + Date.now();
+            
             // Add transactions
             const transactionData = {
+                transactionId: transactionId,
                 from: senderData.displayName,
                 to: recipient.displayName,
                 amount: amount,
@@ -502,7 +521,7 @@
                 ...transactionData,
                 senderAccountNumber: senderData.accountNumber,
                 recipientAccountNumber: recipient.accountNumber,
-                transactionId: 'TXN' + Date.now()
+                transactionId: transactionId
             };
             
             // Update database
@@ -702,6 +721,22 @@
             document.getElementById('detailDate').textContent = formatDate(transaction.timestamp);
             document.getElementById('detailType').textContent = transaction.type === 'credit' ? 'Received' : 'Sent';
             document.getElementById('detailType').className = transaction.type === 'credit' ? 'text-green-500' : 'text-red-500';
+            
+            // Add transaction ID if available
+            if (transaction.transactionId) {
+                document.getElementById('detailTransactionId').textContent = transaction.transactionId;
+                document.getElementById('detailTransactionIdRow').style.display = 'flex';
+            } else {
+                document.getElementById('detailTransactionIdRow').style.display = 'none';
+            }
+            
+            // Show success message
+            const successMessage = document.getElementById('transactionSuccessMessage');
+            successMessage.style.display = 'flex';
+            
+            // Update success message text based on transaction type
+            const successText = transaction.type === 'credit' ? 'Money received successfully!' : 'Money sent successfully!';
+            document.getElementById('successMessageText').textContent = successText;
             
             showScreen('transactionDetails');
         }
@@ -1213,7 +1248,16 @@
                             <span class="text-gray-500">Date & Time</span>
                             <span class="font-medium" id="detailDate">-</span>
                         </div>
+                        <div class="flex justify-between" id="detailTransactionIdRow" style="display: none;">
+                            <span class="text-gray-500">Transaction ID</span>
+                            <span class="font-medium" id="detailTransactionId">-</span>
+                        </div>
                     </div>
+                </div>
+                
+                <div class="success-message" id="transactionSuccessMessage" style="display: none;">
+                    <i class="fas fa-check-circle"></i>
+                    <span id="successMessageText">Money sent successfully!</span>
                 </div>
                 
                 <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
@@ -1244,8 +1288,8 @@
                 <div class="debit-card shadow-xl">
                     <div class="flex justify-between items-start mb-4">
                         <div>
-                            <p class="text-xs opacity-75">Current Balance</p>
-                            <p class="text-2xl font-bold" id="userBalance">₹0.00</p>
+                            <p class="text-xs opacity-75">Available Balance</p>
+                            <p class="text-2xl font-bold" id="cardBalance">₹0.00</p>
                         </div>
                         <div class="chip"></div>
                     </div>
