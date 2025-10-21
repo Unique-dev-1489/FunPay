@@ -7,6 +7,9 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- QR Code Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
     <style>
         .screen {
             display: none;
@@ -118,6 +121,25 @@
             color: #22c55e;
             margin-right: 10px;
         }
+        #qr-reader {
+            width: 100%;
+            max-width: 480px;
+            margin: 0 auto;
+        }
+        #qr-reader video {
+            width: 100%;
+            height: auto;
+        }
+        .qr-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        #qrcode {
+            margin: 20px 0;
+        }
     </style>
 </head>
 <body class="bg-gray-50">
@@ -129,7 +151,7 @@
 
     <script>
         // Firebase configuration
-        const firebaseConfig = {
+         const firebaseConfig = {
   apiKey: "AIzaSyD_jqTqBlb2Dk-muoOCGKU9eQbeQvNFKWY",
   authDomain: "fun-pay-a2cf0.firebaseapp.com",
   databaseURL: "https://fun-pay-a2cf0-default-rtdb.firebaseio.com",
@@ -154,6 +176,12 @@
         
         // Store last transaction for receipt
         let lastTransaction = null;
+        
+        // QR Code scanner instance
+        let html5QrcodeScanner = null;
+        
+        // Scanned user data
+        let scannedUserData = null;
 
         // Initialize app
         document.addEventListener('DOMContentLoaded', function() {
@@ -333,6 +361,11 @@
             } else if (screenId === 'profile') {
                 document.getElementById('profileNavBtn').classList.add('text-blue-600');
                 document.getElementById('profileNavBtn').classList.remove('text-gray-500');
+            }
+            
+            // Stop QR scanner when leaving scan screen
+            if (screenId !== 'scanQR' && html5QrcodeScanner) {
+                html5QrcodeScanner.stop();
             }
         }
 
@@ -790,6 +823,190 @@
             const date = new Date(timestamp);
             return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         }
+        
+        // QR Code Functions
+        
+        // Generate QR Code
+        function generateQRCode() {
+            // Get current user data
+            database.ref('users/' + currentUser.uid).once('value').then(snapshot => {
+                if (snapshot.exists()) {
+                    const userData = snapshot.val();
+                    
+                    // Clear previous QR code if exists
+                    document.getElementById('qrcode').innerHTML = '';
+                    
+                    // Create QR code data
+                    const qrData = JSON.stringify({
+                        uid: userData.uid,
+                        accountNumber: userData.accountNumber,
+                        displayName: userData.displayName,
+                        bankName: appSettings.bankName
+                    });
+                    
+                    // Generate QR code
+                    new QRCode(document.getElementById('qrcode'), {
+                        text: qrData,
+                        width: 200,
+                        height: 200,
+                        colorDark: "#000000",
+                        colorLight: "#ffffff",
+                        correctLevel: QRCode.CorrectLevel.H
+                    });
+                    
+                    // Update QR code screen with user details
+                    document.getElementById('qrAccountNumber').textContent = userData.accountNumber;
+                    document.getElementById('qrDisplayName').textContent = userData.displayName;
+                    document.getElementById('qrBankName').textContent = appSettings.bankName;
+                    
+                    // Show QR code screen
+                    showScreen('showQR');
+                }
+            });
+        }
+        
+        // Start QR Scanner
+        function startQRScanner() {
+            showScreen('scanQR');
+            
+            // Initialize scanner if not already initialized
+            if (!html5QrcodeScanner) {
+                html5QrcodeScanner = new Html5Qrcode("qr-reader");
+            }
+            
+            // Start scanning
+            html5QrcodeScanner.start(
+                { facingMode: "environment" },
+                {
+                    fps: 10,
+                    qrbox: { width: 250, height: 250 }
+                },
+                (decodedText, decodedResult) => {
+                    // QR code scanned successfully
+                    try {
+                        const userData = JSON.parse(decodedText);
+                        
+                        // Store scanned user data
+                        scannedUserData = userData;
+                        
+                        // Stop scanner
+                        html5QrcodeScanner.stop();
+                        
+                        // Show payment screen with scanned user data
+                        showQRPaymentScreen(userData);
+                    } catch (error) {
+                        alert('Invalid QR code format');
+                    }
+                },
+                (errorMessage) => {
+                    // Handle scan error silently
+                }
+            ).catch((err) => {
+                console.error(`Unable to start scanning: ${err}`);
+                alert('Unable to access camera. Please check permissions.');
+            });
+        }
+        
+        // Show QR payment screen
+        function showQRPaymentScreen(userData) {
+            // Update payment screen with user details
+            document.getElementById('qrPayAccountNumber').textContent = userData.accountNumber;
+            document.getElementById('qrPayDisplayName').textContent = userData.displayName;
+            document.getElementById('qrPayBankName').textContent = userData.bankName;
+            
+            // Clear previous amount
+            document.getElementById('qrPayAmount').value = '';
+            
+            // Show payment screen
+            showScreen('qrPay');
+        }
+        
+        // Process QR payment
+        function processQRPayment() {
+            const amount = parseFloat(document.getElementById('qrPayAmount').value);
+            
+            if (!amount || amount <= 0) {
+                alert('Please enter a valid amount');
+                return;
+            }
+            
+            // Verify PIN
+            verifyPin(() => {
+                // Get current user balance
+                database.ref('users/' + currentUser.uid).once('value').then(snapshot => {
+                    const userData = snapshot.val();
+                    
+                    if (userData.balance < amount) {
+                        alert('Insufficient balance');
+                        return;
+                    }
+                    
+                    // Get recipient data
+                    database.ref('users/' + scannedUserData.uid).once('value').then(recipientSnapshot => {
+                        if (recipientSnapshot.exists()) {
+                            const recipientData = recipientSnapshot.val();
+                            
+                            // Process transaction
+                            processQRTransaction(recipientData, amount, userData);
+                        } else {
+                            alert('Recipient account not found');
+                        }
+                    });
+                });
+            });
+        }
+        
+        // Process QR transaction
+        function processQRTransaction(recipientData, amount, senderData) {
+            // Update balances
+            const updates = {};
+            updates['users/' + currentUser.uid + '/balance'] = senderData.balance - amount;
+            updates['users/' + recipientData.uid + '/balance'] = recipientData.balance + amount;
+            
+            // Generate transaction ID
+            const transactionId = 'TXN' + Date.now();
+            
+            // Add transactions
+            const transactionData = {
+                transactionId: transactionId,
+                from: senderData.displayName,
+                to: recipientData.displayName,
+                amount: amount,
+                note: 'QR Code Payment',
+                timestamp: Date.now(),
+                type: 'debit',
+                paymentMethod: 'QR Code'
+            };
+            
+            updates['transactions/' + currentUser.uid + '/' + Date.now()] = transactionData;
+            
+            const creditTransaction = { ...transactionData, type: 'credit' };
+            updates['transactions/' + recipientData.uid + '/' + Date.now()] = creditTransaction;
+            
+            // Send notification to recipient
+            updates['notifications/' + recipientData.uid + '/' + Date.now()] = {
+                title: 'Money Received',
+                message: `${senderData.displayName} sent you ₹${amount.toFixed(2)} via QR Code`,
+                timestamp: Date.now()
+            };
+            
+            // Store transaction for receipt
+            lastTransaction = {
+                ...transactionData,
+                senderAccountNumber: senderData.accountNumber,
+                recipientAccountNumber: recipientData.accountNumber,
+                transactionId: transactionId
+            };
+            
+            // Update database
+            database.ref().update(updates).then(() => {
+                // Clear form
+                document.getElementById('qrPayAmount').value = '';
+                
+                // Show success screen
+                showPaymentSuccess();
+            });
+        }
     </script>
 
     <!-- Welcome/Onboarding Screen -->
@@ -956,6 +1173,10 @@
                         <img id="homeProfileIcon" src="https://picsum.photos/seed/user/200/200.jpg" class="w-12 h-12 rounded-full border-2 border-white">
                         <div class="absolute bottom-0 right-0 w-4 h-4 bg-green-400 rounded-full border-2 border-white"></div>
                     </div>
+                    <!-- Scan QR Button -->
+                    <button onclick="startQRScanner()" class="w-10 h-10 bg-white/20 backdrop-blur rounded-full flex items-center justify-center">
+                        <i class="fas fa-qrcode text-white"></i>
+                    </button>
                 </div>
                 
                 <div class="bg-white/20 backdrop-blur rounded-xl p-4">
@@ -1045,41 +1266,106 @@
 
     <!-- Send Money Screen -->
     <div id="send" class="screen">
-        <div class="phone-container bg-white min-h-screen">
+        <div class="phone-container bg-white">
+            <!-- Header -->
             <div class="bg-blue-500 text-white p-4 flex items-center">
                 <button onclick="showScreen('home')" class="mr-3">
-                    <i class="fas fa-arrow-left text-xl"></i>
+                    <i class="fas fa-arrow-left"></i>
                 </button>
                 <h2 class="text-xl font-semibold">Send Money</h2>
             </div>
             
-            <div class="p-6">
-                <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-6">
+            <!-- Payment Method Tabs -->
+            <div class="flex border-b border-gray-200">
+                <button onclick="document.getElementById('accountMethod').classList.add('active'); document.getElementById('qrMethod').classList.remove('active'); document.getElementById('accountPayment').style.display='block'; document.getElementById('qrPayment').style.display='none';" id="accountMethod" class="flex-1 py-3 text-center font-medium text-blue-600 border-b-2 border-blue-600">
+                    Account/Email
+                </button>
+                <button onclick="document.getElementById('qrMethod').classList.add('active'); document.getElementById('accountMethod').classList.remove('active'); document.getElementById('accountPayment').style.display='none'; document.getElementById('qrPayment').style.display='block';" id="qrMethod" class="flex-1 py-3 text-center font-medium text-gray-500">
+                    QR Code
+                </button>
+            </div>
+            
+            <!-- Account/Email Payment Form -->
+            <div id="accountPayment" class="p-6">
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Recipient</label>
+                    <input type="text" id="recipient" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Account number or email">
+                </div>
+                
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Amount (₹)</label>
+                    <input type="number" id="amount" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="0.00">
+                </div>
+                
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Note (Optional)</label>
+                    <textarea id="note" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" rows="3" placeholder="What's this payment for?"></textarea>
+                </div>
+                
+                <button onclick="sendMoney()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
+                    Send Money
+                </button>
+                
+                <div class="mt-4 p-3 bg-yellow-50 rounded-lg">
                     <p class="text-xs text-yellow-700">
-                        <i class="fas fa-exclamation-triangle mr-1"></i>
+                        <i class="fas fa-info-circle mr-1"></i>
                         This is a simulated transaction for educational purposes only.
                     </p>
                 </div>
-                
-                <div class="space-y-4">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Recipient (Account Number or Email)</label>
-                        <input type="text" id="recipient" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter account number or email">
+            </div>
+            
+            <!-- QR Code Payment Form -->
+            <div id="qrPayment" class="p-6" style="display: none;">
+                <div class="flex flex-col items-center justify-center py-8">
+                    <div class="w-32 h-32 bg-gray-100 rounded-lg flex items-center justify-center mb-4">
+                        <i class="fas fa-qrcode text-gray-400 text-5xl"></i>
                     </div>
-                    
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Amount (₹)</label>
-                        <input type="number" id="amount" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="0.00">
-                    </div>
-                    
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Note (Optional)</label>
-                        <input type="text" id="note" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="What's this for?">
-                    </div>
-                    
-                    <button onclick="sendMoney()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
-                        Send Money
+                    <p class="text-gray-600 mb-6">Scan a QR code to pay</p>
+                    <button onclick="startQRScanner()" class="bg-blue-500 text-white py-3 px-6 rounded-lg font-medium hover:bg-blue-600 transition">
+                        <i class="fas fa-camera mr-2"></i>Scan QR Code
                     </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Request Money Screen -->
+    <div id="request" class="screen">
+        <div class="phone-container bg-white">
+            <!-- Header -->
+            <div class="bg-green-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('home')" class="mr-3">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Request Money</h2>
+            </div>
+            
+            <!-- Form -->
+            <div class="p-6">
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">From</label>
+                    <input type="text" id="requestRecipient" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="Account number or email">
+                </div>
+                
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Amount (₹)</label>
+                    <input type="number" id="requestAmount" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="0.00">
+                </div>
+                
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Note (Optional)</label>
+                    <textarea id="requestNote" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500" rows="3" placeholder="What's this request for?"></textarea>
+                </div>
+                
+                <button onclick="requestMoney()" class="w-full bg-green-500 text-white py-3 rounded-lg font-medium hover:bg-green-600 transition">
+                    Send Request
+                </button>
+                
+                <div class="mt-4 p-3 bg-yellow-50 rounded-lg">
+                    <p class="text-xs text-yellow-700">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        This is a simulated request for educational purposes only.
+                    </p>
                 </div>
             </div>
         </div>
@@ -1087,360 +1373,298 @@
 
     <!-- Payment Success Screen -->
     <div id="paymentSuccess" class="screen">
-        <div class="phone-container bg-white min-h-screen">
-            <div class="bg-gradient-to-r from-green-500 to-green-600 text-white p-6">
-                <div class="text-center">
-                    <div id="successIcon" class="w-20 h-20 bg-white rounded-full flex items-center justify-center mx-auto mb-4">
-                        <i class="fas fa-check text-green-500 text-4xl"></i>
+        <div class="phone-container bg-white">
+            <div class="flex flex-col items-center justify-center min-h-screen p-6">
+                <div class="mb-8 text-center">
+                    <div id="successIcon" class="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <i class="fas fa-check text-green-500 text-3xl"></i>
                     </div>
-                    <h2 class="text-2xl font-bold">Payment Successful</h2>
-                </div>
-            </div>
-            
-            <div class="p-6">
-                <div class="text-center mb-6">
-                    <p class="text-gray-600 mb-2">Payment sent to</p>
-                    <h3 class="text-xl font-semibold" id="successRecipient">Recipient Name</h3>
+                    <h2 class="text-2xl font-bold text-gray-800">Payment Successful!</h2>
                 </div>
                 
-                <div class="text-center mb-6">
-                    <p class="big-amount text-green-500" id="successAmount">₹0.00</p>
-                </div>
-                
-                <div class="bg-gray-50 rounded-lg p-4 mb-6">
-                    <div class="flex justify-between mb-2">
-                        <span class="text-gray-600">Transaction ID</span>
-                        <span class="font-medium" id="successTransactionId">TXN123456789</span>
+                <div class="w-full bg-gray-50 rounded-xl p-6 mb-6">
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">To:</span>
+                        <span class="font-medium" id="successRecipient">Recipient</span>
                     </div>
-                    <div class="flex justify-between mb-2">
-                        <span class="text-gray-600">Date & Time</span>
-                        <span class="font-medium" id="successDate">Jan 1, 2023 12:00 PM</span>
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">Amount:</span>
+                        <span class="font-medium big-amount text-blue-500" id="successAmount">₹0.00</span>
                     </div>
-                    <div class="flex justify-between">
-                        <span class="text-gray-600">Note</span>
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">Note:</span>
                         <span class="font-medium" id="successNote">Payment</span>
                     </div>
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">Date:</span>
+                        <span class="font-medium" id="successDate">Today</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">Transaction ID:</span>
+                        <span class="font-medium text-xs" id="successTransactionId">TXN123456789</span>
+                    </div>
                 </div>
                 
-                <div class="grid grid-cols-2 gap-4 mb-6">
-                    <button onclick="shareTransaction()" class="bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition flex items-center justify-center">
-                        <i class="fas fa-share-alt mr-2"></i>
-                        Share
+                <div class="w-full space-y-3">
+                    <button onclick="shareTransaction()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
+                        <i class="fas fa-share-alt mr-2"></i>Share
                     </button>
-                    <button onclick="downloadPDFReceipt()" class="bg-purple-500 text-white py-3 rounded-lg font-medium hover:bg-purple-600 transition flex items-center justify-center">
-                        <i class="fas fa-download mr-2"></i>
-                        Download PDF
+                    <button onclick="downloadPDFReceipt()" class="w-full bg-gray-200 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-300 transition">
+                        <i class="fas fa-download mr-2"></i>Download Receipt
                     </button>
-                </div>
-                
-                <button onclick="showScreen('home')" class="w-full bg-gray-200 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-300 transition">
-                    Back to Home
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Request Money Screen -->
-    <div id="request" class="screen">
-        <div class="phone-container bg-white min-h-screen">
-            <div class="bg-green-500 text-white p-4 flex items-center">
-                <button onclick="showScreen('home')" class="mr-3">
-                    <i class="fas fa-arrow-left text-xl"></i>
-                </button>
-                <h2 class="text-xl font-semibold">Request Money</h2>
-            </div>
-            
-            <div class="p-6">
-                <div class="space-y-4">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">From (Account Number or Email)</label>
-                        <input type="text" id="requestRecipient" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="Enter account number or email">
-                    </div>
-                    
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Amount (₹)</label>
-                        <input type="number" id="requestAmount" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="0.00">
-                    </div>
-                    
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Note (Optional)</label>
-                        <input type="text" id="requestNote" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="What's this for?">
-                    </div>
-                    
-                    <button onclick="requestMoney()" class="w-full bg-green-500 text-white py-3 rounded-lg font-medium hover:bg-green-600 transition">
-                        Send Request
+                    <button onclick="showScreen('home')" class="w-full border border-gray-300 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-50 transition">
+                        Done
                     </button>
                 </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Transaction History Screen -->
-    <div id="history" class="screen">
-        <div class="phone-container bg-gray-50 min-h-screen pb-20">
-            <div class="bg-white p-4 shadow-sm">
-                <h2 class="text-xl font-semibold text-gray-800">Transaction History</h2>
-            </div>
-            
-            <div class="p-4">
-                <div class="bg-white rounded-xl shadow-sm" id="historyList">
-                    <!-- Transactions will be loaded here -->
-                </div>
-            </div>
-        </div>
-        
-        <!-- Bottom Navigation -->
-        <div class="bottom-nav bg-white border-t border-gray-200">
-            <div class="grid grid-cols-4 py-2">
-                <button onclick="showScreen('home')" class="nav-btn flex flex-col items-center py-2 text-gray-500" id="homeNavBtn">
-                    <i class="fas fa-home text-xl mb-1"></i>
-                    <span class="text-xs">Home</span>
-                </button>
-                
-                <button onclick="showScreen('history')" class="nav-btn flex flex-col items-center py-2 text-blue-600" id="historyNavBtn">
-                    <i class="fas fa-history text-xl mb-1"></i>
-                    <span class="text-xs">History</span>
-                </button>
-                
-                <button onclick="showScreen('profile')" class="nav-btn flex flex-col items-center py-2 text-gray-500" id="profileNavBtn">
-                    <i class="fas fa-user text-xl mb-1"></i>
-                    <span class="text-xs">Profile</span>
-                </button>
             </div>
         </div>
     </div>
 
     <!-- Transaction Details Screen -->
     <div id="transactionDetails" class="screen">
-        <div class="phone-container bg-white min-h-screen">
+        <div class="phone-container bg-white">
+            <!-- Header -->
             <div class="bg-blue-500 text-white p-4 flex items-center">
                 <button onclick="showScreen('history')" class="mr-3">
-                    <i class="fas fa-arrow-left text-xl"></i>
+                    <i class="fas fa-arrow-left"></i>
                 </button>
                 <h2 class="text-xl font-semibold">Transaction Details</h2>
             </div>
             
+            <!-- Success Message -->
+            <div id="transactionSuccessMessage" class="success-message mx-4 mt-4">
+                <i class="fas fa-check-circle"></i>
+                <span id="successMessageText">Transaction successful!</span>
+            </div>
+            
+            <!-- Details -->
             <div class="p-6">
-                <div class="bg-gray-50 rounded-xl p-6 mb-4">
-                    <div class="text-center mb-4">
-                        <p class="text-sm text-gray-500 mb-1">Transaction Type</p>
-                        <p class="text-lg font-semibold" id="detailType">Sent</p>
+                <div class="bg-gray-50 rounded-xl p-6 mb-6">
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">From:</span>
+                        <span class="font-medium" id="detailFrom">Sender</span>
                     </div>
-                    
-                    <div class="text-center mb-4">
-                        <p class="text-3xl font-bold" id="detailAmount">₹0.00</p>
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">To:</span>
+                        <span class="font-medium" id="detailTo">Recipient</span>
                     </div>
-                    
-                    <div class="border-t border-gray-200 pt-4 space-y-3">
-                        <div class="flex justify-between">
-                            <span class="text-gray-500">From</span>
-                            <span class="font-medium" id="detailFrom">-</span>
-                        </div>
-                        <div class="flex justify-between">
-                            <span class="text-gray-500">To</span>
-                            <span class="font-medium" id="detailTo">-</span>
-                        </div>
-                        <div class="flex justify-between">
-                            <span class="text-gray-500">Note</span>
-                            <span class="font-medium" id="detailNote">-</span>
-                        </div>
-                        <div class="flex justify-between">
-                            <span class="text-gray-500">Date & Time</span>
-                            <span class="font-medium" id="detailDate">-</span>
-                        </div>
-                        <div class="flex justify-between" id="detailTransactionIdRow" style="display: none;">
-                            <span class="text-gray-500">Transaction ID</span>
-                            <span class="font-medium" id="detailTransactionId">-</span>
-                        </div>
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">Amount:</span>
+                        <span class="font-medium text-xl" id="detailAmount">₹0.00</span>
+                    </div>
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">Type:</span>
+                        <span class="font-medium" id="detailType">Sent</span>
+                    </div>
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">Note:</span>
+                        <span class="font-medium" id="detailNote">Payment</span>
+                    </div>
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">Date:</span>
+                        <span class="font-medium" id="detailDate">Today</span>
+                    </div>
+                    <div class="flex justify-between" id="detailTransactionIdRow" style="display: none;">
+                        <span class="text-gray-600">Transaction ID:</span>
+                        <span class="font-medium text-xs" id="detailTransactionId">TXN123456789</span>
                     </div>
                 </div>
                 
-                <div class="success-message" id="transactionSuccessMessage" style="display: none;">
-                    <i class="fas fa-check-circle"></i>
-                    <span id="successMessageText">Money sent successfully!</span>
-                </div>
-                
-                <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-                    <p class="text-xs text-yellow-700">
-                        <i class="fas fa-exclamation-triangle mr-1"></i>
-                        This is a simulated transaction for educational purposes only.
-                    </p>
+                <div class="w-full space-y-3">
+                    <button onclick="shareTransaction()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
+                        <i class="fas fa-share-alt mr-2"></i>Share
+                    </button>
+                    <button onclick="downloadPDFReceipt()" class="w-full bg-gray-200 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-300 transition">
+                        <i class="fas fa-download mr-2"></i>Download Receipt
+                    </button>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Profile/Settings Screen -->
+    <!-- History Screen -->
+    <div id="history" class="screen">
+        <div class="phone-container bg-gray-50 pb-20">
+            <!-- Header -->
+            <div class="bg-blue-500 text-white p-4">
+                <h2 class="text-xl font-semibold">Transaction History</h2>
+            </div>
+            
+            <!-- Transactions List -->
+            <div class="p-4">
+                <div id="historyTransactionsList" class="bg-white rounded-xl shadow-sm">
+                    <p class="text-gray-500 text-center py-4">No transactions yet</p>
+                </div>
+            </div>
+            
+            <!-- Bottom Navigation -->
+            <div class="bottom-nav bg-white border-t border-gray-200">
+                <div class="grid grid-cols-4 py-2">
+                    <button onclick="showScreen('home')" class="nav-btn flex flex-col items-center py-2 text-gray-500" id="homeNavBtn">
+                        <i class="fas fa-home text-xl mb-1"></i>
+                        <span class="text-xs">Home</span>
+                    </button>
+                    
+                    <button onclick="showScreen('history')" class="nav-btn flex flex-col items-center py-2 text-blue-600" id="historyNavBtn">
+                        <i class="fas fa-history text-xl mb-1"></i>
+                        <span class="text-xs">History</span>
+                    </button>
+                    
+                    <button onclick="showScreen('profile')" class="nav-btn flex flex-col items-center py-2 text-gray-500" id="profileNavBtn">
+                        <i class="fas fa-user text-xl mb-1"></i>
+                        <span class="text-xs">Profile</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Profile Screen -->
     <div id="profile" class="screen">
-        <div class="phone-container bg-gray-50 min-h-screen pb-20">
-            <div class="bg-gradient-to-r from-blue-500 to-blue-600 text-white p-6">
-                <div class="flex items-center">
+        <div class="phone-container bg-gray-50 pb-20">
+            <!-- Header -->
+            <div class="bg-gradient-to-r from-purple-500 to-purple-600 text-white p-6">
+                <div class="flex items-center mb-4">
                     <img id="profileIcon" src="https://picsum.photos/seed/user/200/200.jpg" class="w-20 h-20 rounded-full border-3 border-white mr-4">
                     <div>
                         <h2 class="text-xl font-bold" id="profileName">User</h2>
                         <p class="text-sm opacity-90" id="profileEmail">user@example.com</p>
                     </div>
                 </div>
+                
+                <div class="bg-white/20 backdrop-blur rounded-xl p-4">
+                    <p class="text-sm opacity-90" id="bankName">Children Bank of India</p>
+                    <p class="text-lg font-bold mt-1" id="cardNumber">FPXXXX XXXX XXXX XXXX</p>
+                    <p class="text-xs opacity-75 mt-1">Valid Thru: <span id="cardExpiry">12/28</span></p>
+                </div>
             </div>
             
-            <!-- Debit Card -->
-            <div class="px-4 -mt-8">
-                <div class="debit-card shadow-xl">
+            <!-- Card Section -->
+            <div class="px-6 mt-6">
+                <h3 class="font-semibold text-gray-800 mb-3">Your Card</h3>
+                <div class="debit-card p-6 text-white shadow-lg">
                     <div class="flex justify-between items-start mb-4">
                         <div>
-                            <p class="text-xs opacity-75">Available Balance</p>
+                            <p class="text-xs opacity-75">Balance</p>
                             <p class="text-2xl font-bold" id="cardBalance">₹0.00</p>
                         </div>
                         <div class="chip"></div>
                     </div>
-                    
-                    <div class="mb-4">
-                        <p class="text-xs opacity-75 mb-1">Card Number</p>
-                        <p class="text-lg font-mono tracking-wider" id="cardNumber">FP•••• •••• •••• ••••</p>
-                    </div>
-                    
-                    <div class="flex justify-between items-end">
-                        <div>
-                            <p class="text-xs opacity-75 mb-1">Card Holder</p>
-                            <p class="font-semibold" id="cardHolderName">USER NAME</p>
-                        </div>
-                        <div class="text-right">
-                            <p class="text-xs opacity-75 mb-1">Valid Thru</p>
-                            <p class="font-semibold" id="cardExpiry">12/28</p>
-                        </div>
+                    <div class="mt-8">
+                        <p class="text-xs opacity-75">Card Holder</p>
+                        <p class="text-lg font-medium" id="cardHolderName">USER</p>
                     </div>
                 </div>
             </div>
             
-            <div class="p-4 space-y-4">
-                <div class="bg-white rounded-xl shadow-sm p-4">
-                    <h3 class="font-semibold text-gray-800 mb-3">Account Settings</h3>
+            <!-- Profile Options -->
+            <div class="px-6 mt-6">
+                <h3 class="font-semibold text-gray-800 mb-3">Account Settings</h3>
+                <div class="bg-white rounded-xl shadow-sm">
+                    <button onclick="generateQRCode()" class="w-full p-4 flex items-center justify-between border-b border-gray-100">
+                        <div class="flex items-center">
+                            <div class="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center mr-3">
+                                <i class="fas fa-qrcode text-indigo-500"></i>
+                            </div>
+                            <span class="font-medium">Show QR Code</span>
+                        </div>
+                        <i class="fas fa-chevron-right text-gray-400"></i>
+                    </button>
                     
-                    <div class="space-y-3">
-                        <button onclick="document.getElementById('profilePictureInput').click()" class="w-full flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg transition">
-                            <div class="flex items-center">
-                                <i class="fas fa-camera text-blue-500 mr-3"></i>
-                                <span>Change Profile Picture</span>
+                    <button onclick="showScreen('changePin')" class="w-full p-4 flex items-center justify-between border-b border-gray-100">
+                        <div class="flex items-center">
+                            <div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center mr-3">
+                                <i class="fas fa-lock text-blue-500"></i>
                             </div>
-                            <i class="fas fa-chevron-right text-gray-400"></i>
-                        </button>
-                        <input type="file" id="profilePictureInput" accept="image/*" onchange="uploadProfilePicture()" style="display: none;">
-                        
-                        <button onclick="showScreen('changePin')" class="w-full flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg transition">
-                            <div class="flex items-center">
-                                <i class="fas fa-lock text-blue-500 mr-3"></i>
-                                <span>Change PIN</span>
-                            </div>
-                            <i class="fas fa-chevron-right text-gray-400"></i>
-                        </button>
-                        
-                        <button onclick="showScreen('notifications')" class="w-full flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg transition">
-                            <div class="flex items-center">
-                                <i class="fas fa-bell text-blue-500 mr-3"></i>
-                                <span>Notifications</span>
-                            </div>
-                            <i class="fas fa-chevron-right text-gray-400"></i>
-                        </button>
-                    </div>
-                </div>
-                
-                <div class="bg-white rounded-xl shadow-sm p-4">
-                    <h3 class="font-semibold text-gray-800 mb-3">About</h3>
+                            <span class="font-medium">Change PIN</span>
+                        </div>
+                        <i class="fas fa-chevron-right text-gray-400"></i>
+                    </button>
                     
-                    <div class="space-y-3">
-                        <button onclick="showScreen('terms')" class="w-full flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg transition">
-                            <div class="flex items-center">
-                                <i class="fas fa-info-circle text-blue-500 mr-3"></i>
-                                <span>Terms & Conditions</span>
+                    <button onclick="document.getElementById('profilePictureInput').click()" class="w-full p-4 flex items-center justify-between border-b border-gray-100">
+                        <div class="flex items-center">
+                            <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center mr-3">
+                                <i class="fas fa-camera text-green-500"></i>
                             </div>
-                            <i class="fas fa-chevron-right text-gray-400"></i>
-                        </button>
-                        
-                        <button onclick="showScreen('support')" class="w-full flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg transition">
-                            <div class="flex items-center">
-                                <i class="fas fa-question-circle text-blue-500 mr-3"></i>
-                                <span>Help & Support</span>
+                            <span class="font-medium">Update Profile Picture</span>
+                        </div>
+                        <i class="fas fa-chevron-right text-gray-400"></i>
+                    </button>
+                    
+                    <button onclick="signOut()" class="w-full p-4 flex items-center justify-between">
+                        <div class="flex items-center">
+                            <div class="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center mr-3">
+                                <i class="fas fa-sign-out-alt text-red-500"></i>
                             </div>
-                            <i class="fas fa-chevron-right text-gray-400"></i>
-                        </button>
-                    </div>
+                            <span class="font-medium">Sign Out</span>
+                        </div>
+                        <i class="fas fa-chevron-right text-gray-400"></i>
+                    </button>
                 </div>
-                
-                <div class="bg-white rounded-xl shadow-sm p-4">
-                    <h3 class="font-semibold text-gray-800 mb-3">Educational Disclaimer</h3>
-                    <p class="text-sm text-gray-600 mb-3">
-                        Fun Pay is an educational app that simulates payment transactions. No real money is involved. 
-                        This app is not affiliated with any bank or financial institution.
-                    </p>
-                    <p class="text-xs text-gray-500">
-                        Version 1.0.0 | Educational Platform
-                    </p>
-                </div>
-                
-                <button onclick="signOut()" class="w-full bg-red-500 text-white py-3 rounded-lg font-medium hover:bg-red-600 transition">
-                    Sign Out
-                </button>
             </div>
-        </div>
-        
-        <!-- Bottom Navigation -->
-        <div class="bottom-nav bg-white border-t border-gray-200">
-            <div class="grid grid-cols-4 py-2">
-                <button onclick="showScreen('home')" class="nav-btn flex flex-col items-center py-2 text-gray-500" id="homeNavBtn">
-                    <i class="fas fa-home text-xl mb-1"></i>
-                    <span class="text-xs">Home</span>
-                </button>
-                
-                <button onclick="showScreen('history')" class="nav-btn flex flex-col items-center py-2 text-gray-500" id="historyNavBtn">
-                    <i class="fas fa-history text-xl mb-1"></i>
-                    <span class="text-xs">History</span>
-                </button>
-                
-                <button onclick="showScreen('profile')" class="nav-btn flex flex-col items-center py-2 text-blue-600" id="profileNavBtn">
-                    <i class="fas fa-user text-xl mb-1"></i>
-                    <span class="text-xs">Profile</span>
-                </button>
+            
+            <!-- Hidden file input for profile picture -->
+            <input type="file" id="profilePictureInput" accept="image/*" style="display: none;" onchange="uploadProfilePicture()">
+            
+            <!-- Bottom Navigation -->
+            <div class="bottom-nav bg-white border-t border-gray-200">
+                <div class="grid grid-cols-4 py-2">
+                    <button onclick="showScreen('home')" class="nav-btn flex flex-col items-center py-2 text-gray-500" id="homeNavBtn">
+                        <i class="fas fa-home text-xl mb-1"></i>
+                        <span class="text-xs">Home</span>
+                    </button>
+                    
+                    <button onclick="showScreen('history')" class="nav-btn flex flex-col items-center py-2 text-gray-500" id="historyNavBtn">
+                        <i class="fas fa-history text-xl mb-1"></i>
+                        <span class="text-xs">History</span>
+                    </button>
+                    
+                    <button onclick="showScreen('profile')" class="nav-btn flex flex-col items-center py-2 text-blue-600" id="profileNavBtn">
+                        <i class="fas fa-user text-xl mb-1"></i>
+                        <span class="text-xs">Profile</span>
+                    </button>
+                </div>
             </div>
         </div>
     </div>
 
     <!-- Change PIN Screen -->
     <div id="changePin" class="screen">
-        <div class="phone-container bg-white min-h-screen">
+        <div class="phone-container bg-white">
+            <!-- Header -->
             <div class="bg-blue-500 text-white p-4 flex items-center">
                 <button onclick="showScreen('profile')" class="mr-3">
-                    <i class="fas fa-arrow-left text-xl"></i>
+                    <i class="fas fa-arrow-left"></i>
                 </button>
                 <h2 class="text-xl font-semibold">Change PIN</h2>
             </div>
             
+            <!-- Form -->
             <div class="p-6">
-                <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-                    <p class="text-sm text-blue-700">
-                        <i class="fas fa-info-circle mr-1"></i>
-                        For security reasons, please enter your current PIN and then create a new 4-digit PIN.
-                    </p>
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Current PIN</label>
+                    <input type="password" id="currentPin" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 pin-input" placeholder="••••" maxlength="4">
                 </div>
                 
-                <div class="space-y-4">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Current PIN</label>
-                        <input type="password" id="currentPin" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 pin-input" placeholder="••••" maxlength="4">
-                    </div>
-                    
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">New PIN</label>
-                        <input type="password" id="newPin" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 pin-input" placeholder="••••" maxlength="4">
-                    </div>
-                    
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Confirm New PIN</label>
-                        <input type="password" id="confirmNewPin" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 pin-input" placeholder="••••" maxlength="4">
-                    </div>
-                    
-                    <button onclick="changePin()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
-                        Update PIN
-                    </button>
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">New PIN</label>
+                    <input type="password" id="newPin" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 pin-input" placeholder="••••" maxlength="4">
+                </div>
+                
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Confirm New PIN</label>
+                    <input type="password" id="confirmNewPin" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 pin-input" placeholder="••••" maxlength="4">
+                </div>
+                
+                <button onclick="changePin()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
+                    Change PIN
+                </button>
+                
+                <div class="mt-4 p-3 bg-yellow-50 rounded-lg">
+                    <p class="text-xs text-yellow-700">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        Remember your PIN. You'll need it for all transactions.
+                    </p>
                 </div>
             </div>
         </div>
@@ -1448,86 +1672,59 @@
 
     <!-- Notifications Screen -->
     <div id="notifications" class="screen">
-        <div class="phone-container bg-white min-h-screen">
-            <div class="bg-blue-500 text-white p-4 flex items-center">
-                <button onclick="showScreen('profile')" class="mr-3">
-                    <i class="fas fa-arrow-left text-xl"></i>
+        <div class="phone-container bg-white">
+            <!-- Header -->
+            <div class="bg-orange-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('home')" class="mr-3">
+                    <i class="fas fa-arrow-left"></i>
                 </button>
                 <h2 class="text-xl font-semibold">Notifications</h2>
             </div>
             
+            <!-- Notifications List -->
             <div class="p-4">
-                <div id="notificationsList">
+                <div id="notificationsList" class="bg-white rounded-xl shadow-sm">
                     <p class="text-gray-500 text-center py-4">No notifications</p>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Terms & Conditions Screen -->
-    <div id="terms" class="screen">
-        <div class="phone-container bg-white min-h-screen">
-            <div class="bg-blue-500 text-white p-4 flex items-center">
+    <!-- Show QR Code Screen -->
+    <div id="showQR" class="screen">
+        <div class="phone-container bg-white">
+            <!-- Header -->
+            <div class="bg-indigo-500 text-white p-4 flex items-center">
                 <button onclick="showScreen('profile')" class="mr-3">
-                    <i class="fas fa-arrow-left text-xl"></i>
+                    <i class="fas fa-arrow-left"></i>
                 </button>
-                <h2 class="text-xl font-semibold">Terms & Conditions</h2>
+                <h2 class="text-xl font-semibold">Your QR Code</h2>
             </div>
             
+            <!-- QR Code Display -->
             <div class="p-6">
-                <div class="space-y-4">
-                    <div>
-                        <h3 class="font-semibold text-gray-800 mb-2">1. Educational Purpose Only</h3>
-                        <p class="text-sm text-gray-600">
-                            Fun Pay is an educational platform designed to teach users about digital payment systems. 
-                            All transactions are simulated and no real money is involved.
-                        </p>
+                <div class="qr-container">
+                    <div id="qrcode"></div>
+                    
+                    <div class="bg-gray-50 rounded-xl p-4 mt-6 w-full">
+                        <div class="flex justify-between mb-2">
+                            <span class="text-gray-600">Account Number:</span>
+                            <span class="font-medium" id="qrAccountNumber">FPXXXXXXXXX</span>
+                        </div>
+                        <div class="flex justify-between mb-2">
+                            <span class="text-gray-600">Name:</span>
+                            <span class="font-medium" id="qrDisplayName">User Name</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-600">Bank:</span>
+                            <span class="font-medium" id="qrBankName">Children Bank of India</span>
+                        </div>
                     </div>
                     
-                    <div>
-                        <h3 class="font-semibold text-gray-800 mb-2">2. Account Responsibility</h3>
-                        <p class="text-sm text-gray-600">
-                            Users are responsible for maintaining the confidentiality of their account credentials, 
-                            including their PIN. Sharing account details is strictly prohibited.
-                        </p>
-                    </div>
-                    
-                    <div>
-                        <h3 class="font-semibold text-gray-800 mb-2">3. Platform Usage</h3>
-                        <p class="text-sm text-gray-600">
-                            The platform should be used for educational purposes only. Any misuse, including attempts 
-                            to manipulate the system for personal gain, may result in account suspension.
-                        </p>
-                    </div>
-                    
-                    <div>
-                        <h3 class="font-semibold text-gray-800 mb-2">4. Data Privacy</h3>
-                        <p class="text-sm text-gray-600">
-                            User data is collected for educational purposes and is not shared with third parties. 
-                            The platform does not store any financial information as no real transactions occur.
-                        </p>
-                    </div>
-                    
-                    <div>
-                        <h3 class="font-semibold text-gray-800 mb-2">5. Platform Availability</h3>
-                        <p class="text-sm text-gray-600">
-                            Fun Pay is provided "as is" for educational purposes. The service may be temporarily 
-                            unavailable for maintenance or updates without prior notice.
-                        </p>
-                    </div>
-                    
-                    <div>
-                        <h3 class="font-semibold text-gray-800 mb-2">6. Age Restriction</h3>
-                        <p class="text-sm text-gray-600">
-                            Users under the age of 13 should not use this platform without parental supervision. 
-                            The platform is designed primarily for educational use by teenagers and young adults.
-                        </p>
-                    </div>
-                    
-                    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mt-6">
-                        <p class="text-xs text-yellow-700">
-                            <i class="fas fa-exclamation-triangle mr-1"></i>
-                            By using Fun Pay, you acknowledge that this is an educational platform and not a real financial service.
+                    <div class="mt-6 p-3 bg-blue-50 rounded-lg">
+                        <p class="text-xs text-blue-700 text-center">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            Share this QR code to receive payments
                         </p>
                     </div>
                 </div>
@@ -1535,91 +1732,114 @@
         </div>
     </div>
 
-    <!-- Help & Support Screen -->
-    <div id="support" class="screen">
-        <div class="phone-container bg-white min-h-screen">
-            <div class="bg-blue-500 text-white p-4 flex items-center">
-                <button onclick="showScreen('profile')" class="mr-3">
-                    <i class="fas fa-arrow-left text-xl"></i>
+    <!-- Scan QR Code Screen -->
+    <div id="scanQR" class="screen">
+        <div class="phone-container bg-white">
+            <!-- Header -->
+            <div class="bg-indigo-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('home')" class="mr-3">
+                    <i class="fas fa-arrow-left"></i>
                 </button>
-                <h2 class="text-xl font-semibold">Help & Support</h2>
+                <h2 class="text-xl font-semibold">Scan QR Code</h2>
             </div>
             
+            <!-- QR Scanner -->
+            <div class="p-4">
+                <div id="qr-reader"></div>
+                
+                <div class="mt-4 p-3 bg-blue-50 rounded-lg">
+                    <p class="text-xs text-blue-700 text-center">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        Position the QR code within the frame to scan
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- QR Payment Screen -->
+    <div id="qrPay" class="screen">
+        <div class="phone-container bg-white">
+            <!-- Header -->
+            <div class="bg-indigo-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('home')" class="mr-3">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Pay via QR Code</h2>
+            </div>
+            
+            <!-- Recipient Details -->
             <div class="p-6">
-                <div class="space-y-4">
-                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                        <h3 class="font-semibold text-blue-800 mb-2">Contact Support</h3>
-                        <p class="text-sm text-blue-700 mb-3">
-                            For any issues or questions about Fun Pay, please contact our support team:
-                        </p>
-                        <div class="flex items-center">
-                            <i class="fas fa-envelope text-blue-500 mr-3"></i>
-                            <a href="mailto:nboy13031@gmail.com" class="text-blue-600 hover:underline">nboy13031@gmail.com</a>
-                        </div>
+                <div class="bg-gray-50 rounded-xl p-4 mb-6">
+                    <div class="flex justify-between mb-2">
+                        <span class="text-gray-600">Account Number:</span>
+                        <span class="font-medium" id="qrPayAccountNumber">FPXXXXXXXXX</span>
                     </div>
-                    
-                    <div>
-                        <h3 class="font-semibold text-gray-800 mb-2">Frequently Asked Questions</h3>
-                        
-                        <div class="space-y-3">
-                            <div class="border border-gray-200 rounded-lg p-3">
-                                <h4 class="font-medium text-gray-700 mb-1">How do I reset my PIN?</h4>
-                                <p class="text-sm text-gray-600">
-                                    Go to Profile > Change PIN. You'll need to enter your current PIN to set a new one.
-                                </p>
-                            </div>
-                            
-                            <div class="border border-gray-200 rounded-lg p-3">
-                                <h4 class="font-medium text-gray-700 mb-1">Is my money real?</h4>
-                                <p class="text-sm text-gray-600">
-                                    No, all money in Fun Pay is virtual and for educational purposes only.
-                                </p>
-                            </div>
-                            
-                            <div class="border border-gray-200 rounded-lg p-3">
-                                <h4 class="font-medium text-gray-700 mb-1">How do I find my account number?</h4>
-                                <p class="text-sm text-gray-600">
-                                    Your account number is displayed on your virtual debit card in the Profile section.
-                                </p>
-                            </div>
-                            
-                            <div class="border border-gray-200 rounded-lg p-3">
-                                <h4 class="font-medium text-gray-700 mb-1">Can I add real money?</h4>
-                                <p class="text-sm text-gray-600">
-                                    No, real money cannot be added. Only administrators can adjust balances for educational purposes.
-                                </p>
-                            </div>
-                        </div>
+                    <div class="flex justify-between mb-2">
+                        <span class="text-gray-600">Name:</span>
+                        <span class="font-medium" id="qrPayDisplayName">User Name</span>
                     </div>
-                    
-                    <div>
-                        <h3 class="font-semibold text-gray-800 mb-2">Report an Issue</h3>
-                        <p class="text-sm text-gray-600 mb-3">
-                            If you're experiencing technical issues or have found a bug, please email us with:
-                        </p>
-                        <ul class="text-sm text-gray-600 list-disc list-inside space-y-1">
-                            <li>Description of the issue</li>
-                            <li>Steps to reproduce the problem</li>
-                            <li>Screenshots if applicable</li>
-                            <li>Your account email</li>
-                        </ul>
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">Bank:</span>
+                        <span class="font-medium" id="qrPayBankName">Children Bank of India</span>
                     </div>
+                </div>
+                
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Amount (₹)</label>
+                    <input type="number" id="qrPayAmount" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="0.00">
+                </div>
+                
+                <button onclick="processQRPayment()" class="w-full bg-indigo-500 text-white py-3 rounded-lg font-medium hover:bg-indigo-600 transition">
+                    Pay
+                </button>
+                
+                <div class="mt-4 p-3 bg-yellow-50 rounded-lg">
+                    <p class="text-xs text-yellow-700">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        You will be asked to enter your PIN to confirm this payment.
+                    </p>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-        // Enable proceed button after checking disclaimer
+        // Enable/disable proceed button based on disclaimer checkbox
         document.getElementById('disclaimerCheck').addEventListener('change', function() {
-            document.getElementById('proceedBtn').disabled = !this.checked;
+            const proceedBtn = document.getElementById('proceedBtn');
+            proceedBtn.disabled = !this.checked;
         });
-
-        // Load history when history screen is shown
-        document.getElementById('historyNavBtn').addEventListener('click', function() {
-            const historyList = document.getElementById('historyList');
-            historyList.innerHTML = document.getElementById('transactionsList').innerHTML;
-        });
+        
+        // Load transactions for history screen
+        function loadHistoryTransactions() {
+            const transactionsRef = database.ref('transactions/' + currentUser.uid);
+            transactionsRef.orderByChild('timestamp').limitToLast(20).on('value', snapshot => {
+                const transactionsList = document.getElementById('historyTransactionsList');
+                transactionsList.innerHTML = '';
+                
+                if (snapshot.exists()) {
+                    const transactions = snapshot.val();
+                    Object.keys(transactions).reverse().forEach(key => {
+                        const transaction = transactions[key];
+                        const transactionEl = createTransactionElement(transaction);
+                        transactionsList.appendChild(transactionEl);
+                    });
+                } else {
+                    transactionsList.innerHTML = '<p class="text-gray-500 text-center py-4">No transactions yet</p>';
+                }
+            });
+        }
+        
+        // Override showScreen to load history transactions when needed
+        const originalShowScreen = showScreen;
+        showScreen = function(screenId) {
+            originalShowScreen(screenId);
+            
+            if (screenId === 'history') {
+                loadHistoryTransactions();
+            }
+        };
     </script>
 </body>
 </html>
