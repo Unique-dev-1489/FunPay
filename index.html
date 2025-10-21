@@ -140,6 +140,22 @@
         #qrcode {
             margin: 20px 0;
         }
+        .terms-content {
+            height: 60vh;
+            overflow-y: auto;
+            padding: 15px;
+            background-color: #f9fafb;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+        .contact-item {
+            display: flex;
+            align-items: center;
+            padding: 15px;
+            background-color: #f9fafb;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
     </style>
 </head>
 <body class="bg-gray-50">
@@ -1007,6 +1023,53 @@
                 showPaymentSuccess();
             });
         }
+        
+        // Change Profile Name
+        function changeProfileName() {
+            const newName = document.getElementById('newProfileName').value;
+            
+            if (!newName || newName.trim() === '') {
+                alert('Please enter a valid name');
+                return;
+            }
+            
+            // Update user profile in Firebase Auth
+            currentUser.updateProfile({ displayName: newName })
+                .then(() => {
+                    // Update user profile in database
+                    database.ref('users/' + currentUser.uid + '/displayName').set(newName)
+                        .then(() => {
+                            // Update UI
+                            document.getElementById('userName').textContent = newName;
+                            document.getElementById('profileName').textContent = newName;
+                            document.getElementById('cardHolderName').textContent = newName.toUpperCase();
+                            
+                            // Clear form
+                            document.getElementById('newProfileName').value = '';
+                            
+                            // Show success message
+                            alert('Profile name updated successfully!');
+                            
+                            // Go back to profile screen
+                            showScreen('profile');
+                        })
+                        .catch(error => {
+                            alert('Error updating profile: ' + error.message);
+                        });
+                })
+                .catch(error => {
+                    alert('Error updating profile: ' + error.message);
+                });
+        }
+        
+        // Load current profile name in change name screen
+        function loadCurrentProfileName() {
+            database.ref('users/' + currentUser.uid + '/displayName').once('value').then(snapshot => {
+                if (snapshot.exists()) {
+                    document.getElementById('newProfileName').value = snapshot.val();
+                }
+            });
+        }
     </script>
 
     <!-- Welcome/Onboarding Screen -->
@@ -1571,6 +1634,36 @@
                         <i class="fas fa-chevron-right text-gray-400"></i>
                     </button>
                     
+                    <button onclick="showScreen('changeName')" class="w-full p-4 flex items-center justify-between border-b border-gray-100">
+                        <div class="flex items-center">
+                            <div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center mr-3">
+                                <i class="fas fa-user-edit text-blue-500"></i>
+                            </div>
+                            <span class="font-medium">Change Profile Name</span>
+                        </div>
+                        <i class="fas fa-chevron-right text-gray-400"></i>
+                    </button>
+                    
+                    <button onclick="showScreen('terms')" class="w-full p-4 flex items-center justify-between border-b border-gray-100">
+                        <div class="flex items-center">
+                            <div class="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center mr-3">
+                                <i class="fas fa-file-contract text-gray-500"></i>
+                            </div>
+                            <span class="font-medium">Terms and Conditions</span>
+                        </div>
+                        <i class="fas fa-chevron-right text-gray-400"></i>
+                    </button>
+                    
+                    <button onclick="showScreen('help')" class="w-full p-4 flex items-center justify-between border-b border-gray-100">
+                        <div class="flex items-center">
+                            <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center mr-3">
+                                <i class="fas fa-question-circle text-green-500"></i>
+                            </div>
+                            <span class="font-medium">Help and Support</span>
+                        </div>
+                        <i class="fas fa-chevron-right text-gray-400"></i>
+                    </button>
+                    
                     <button onclick="showScreen('changePin')" class="w-full p-4 flex items-center justify-between border-b border-gray-100">
                         <div class="flex items-center">
                             <div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center mr-3">
@@ -1623,6 +1716,182 @@
                         <i class="fas fa-user text-xl mb-1"></i>
                         <span class="text-xs">Profile</span>
                     </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Change Name Screen -->
+    <div id="changeName" class="screen">
+        <div class="phone-container bg-white">
+            <!-- Header -->
+            <div class="bg-blue-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('profile')" class="mr-3">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Change Profile Name</h2>
+            </div>
+            
+            <!-- Form -->
+            <div class="p-6">
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">New Name</label>
+                    <input type="text" id="newProfileName" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter your new name">
+                </div>
+                
+                <button onclick="changeProfileName()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
+                    Update Name
+                </button>
+                
+                <div class="mt-4 p-3 bg-yellow-50 rounded-lg">
+                    <p class="text-xs text-yellow-700">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        Your name will be updated across all transactions and your profile.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Terms and Conditions Screen -->
+    <div id="terms" class="screen">
+        <div class="phone-container bg-white">
+            <!-- Header -->
+            <div class="bg-gray-700 text-white p-4 flex items-center">
+                <button onclick="showScreen('profile')" class="mr-3">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Terms and Conditions</h2>
+            </div>
+            
+            <!-- Terms Content -->
+            <div class="p-6">
+                <div class="terms-content">
+                    <h3 class="text-lg font-semibold mb-3">Fun Pay Educational Platform Terms of Use</h3>
+                    
+                    <h4 class="font-semibold mt-4 mb-2">1. Educational Purpose Only</h4>
+                    <p class="text-sm text-gray-600 mb-3">
+                        Fun Pay is an educational platform designed to teach users about digital payment systems. 
+                        All transactions are simulated and do not involve real money. This platform is not a financial 
+                        institution and does not provide actual banking services.
+                    </p>
+                    
+                    <h4 class="font-semibold mt-4 mb-2">2. User Account</h4>
+                    <p class="text-sm text-gray-600 mb-3">
+                        Users must provide accurate information when creating an account. Each user is responsible for 
+                        maintaining the confidentiality of their account credentials, including their password and PIN.
+                    </p>
+                    
+                    <h4 class="font-semibold mt-4 mb-2">3. Privacy</h4>
+                    <p class="text-sm text-gray-600 mb-3">
+                        We respect your privacy and are committed to protecting your personal information. Any data 
+                        collected is used solely for educational purposes and to improve the platform experience.
+                    </p>
+                    
+                    <h4 class="font-semibold mt-4 mb-2">4. Prohibited Activities</h4>
+                    <p class="text-sm text-gray-600 mb-3">
+                        Users are prohibited from attempting to use Fun Pay for actual financial transactions, 
+                        attempting to compromise the security of the platform, or using the platform for any illegal 
+                        or unauthorized purposes.
+                    </p>
+                    
+                    <h4 class="font-semibold mt-4 mb-2">5. Intellectual Property</h4>
+                    <p class="text-sm text-gray-600 mb-3">
+                        All content, features, and functionality of the Fun Pay platform are owned by Fun Pay Educational 
+                        Platform and are protected by copyright, trademark, and other intellectual property laws.
+                    </p>
+                    
+                    <h4 class="font-semibold mt-4 mb-2">6. Limitation of Liability</h4>
+                    <p class="text-sm text-gray-600 mb-3">
+                        Fun Pay Educational Platform is not liable for any direct, indirect, incidental, special, or 
+                        consequential damages resulting from your use of the platform.
+                    </p>
+                    
+                    <h4 class="font-semibold mt-4 mb-2">7. Changes to Terms</h4>
+                    <p class="text-sm text-gray-600 mb-3">
+                        We reserve the right to modify these terms at any time. Continued use of the platform after 
+                        any changes constitutes acceptance of the new terms.
+                    </p>
+                    
+                    <h4 class="font-semibold mt-4 mb-2">8. Contact Information</h4>
+                    <p class="text-sm text-gray-600 mb-3">
+                        For questions about these terms, please contact us at nboy13031@gmail.com
+                    </p>
+                    
+                    <p class="text-xs text-gray-500 mt-6">
+                        Last updated: June 2023
+                    </p>
+                </div>
+                
+                <button onclick="showScreen('profile')" class="w-full bg-gray-700 text-white py-3 rounded-lg font-medium hover:bg-gray-800 transition mt-4">
+                    I Understand
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Help and Support Screen -->
+    <div id="help" class="screen">
+        <div class="phone-container bg-white">
+            <!-- Header -->
+            <div class="bg-green-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('profile')" class="mr-3">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Help and Support</h2>
+            </div>
+            
+            <!-- Help Content -->
+            <div class="p-6">
+                <div class="mb-6">
+                    <h3 class="text-lg font-semibold mb-3">How can we help you?</h3>
+                    <p class="text-sm text-gray-600">
+                        If you're experiencing any issues with Fun Pay or have questions about how to use the platform, 
+                        we're here to help. Please reach out to us using the contact information below.
+                    </p>
+                </div>
+                
+                <div class="space-y-4">
+                    <div class="contact-item">
+                        <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center mr-3">
+                            <i class="fas fa-envelope text-green-500"></i>
+                        </div>
+                        <div>
+                            <p class="font-medium">Email Support</p>
+                            <p class="text-sm text-gray-600">nboy13031@gmail.com</p>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <h4 class="font-semibold text-blue-800 mb-2">Frequently Asked Questions</h4>
+                        
+                        <div class="mb-3">
+                            <p class="font-medium text-sm">Is Fun Pay a real payment app?</p>
+                            <p class="text-xs text-gray-600">No, Fun Pay is an educational platform that simulates payment transactions for learning purposes only.</p>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <p class="font-medium text-sm">Is my financial information secure?</p>
+                            <p class="text-xs text-gray-600">Fun Pay does not handle real money or actual financial information, so there's no financial risk.</p>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <p class="font-medium text-sm">How do I reset my PIN?</p>
+                            <p class="text-xs text-gray-600">Go to Profile > Change PIN and follow the instructions to update your PIN.</p>
+                        </div>
+                        
+                        <div>
+                            <p class="font-medium text-sm">Can I use Fun Pay for real transactions?</p>
+                            <p class="text-xs text-gray-600">No, Fun Pay is strictly for educational purposes and cannot be used for real financial transactions.</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mt-6 p-3 bg-yellow-50 rounded-lg">
+                    <p class="text-xs text-yellow-700">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        Our support team typically responds within 24-48 hours.
+                    </p>
                 </div>
             </div>
         </div>
@@ -1838,6 +2107,8 @@
             
             if (screenId === 'history') {
                 loadHistoryTransactions();
+            } else if (screenId === 'changeName') {
+                loadCurrentProfileName();
             }
         };
     </script>
