@@ -175,10 +175,35 @@
         }
         .delete-confirmation-content {
             background-color: white;
-            border-radius: 8px;
+            border-radius: 12px;
             padding: 20px;
             width: 90%;
             max-width: 400px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+        }
+        /* Reward specific styles */
+        .reward-badge {
+            background-color: #f0abfc;
+            color: #701a75;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: bold;
+            margin-left: 5px;
+        }
+        /* Long press instruction */
+        .long-press-hint {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 10px;
+            z-index: 1001;
+            animation: fadeIn 0.3s ease-in;
+            display: none;
         }
     </style>
 </head>
@@ -191,15 +216,16 @@
 
     <script>
         // Firebase configuration
-         const firebaseConfig = {
-  apiKey: "AIzaSyD_jqTqBlb2Dk-muoOCGKU9eQbeQvNFKWY",
-  authDomain: "fun-pay-a2cf0.firebaseapp.com",
-  databaseURL: "https://fun-pay-a2cf0-default-rtdb.firebaseio.com",
-  projectId: "fun-pay-a2cf0",
-  storageBucket: "fun-pay-a2cf0.firebasestorage.app",
-  messagingSenderId: "238563276663",
-  appId: "1:238563276663:web:313b1cf7f5bd6dbd075372"
-};
+        const firebaseConfig = {
+            apiKey: "AIzaSyD_jqTqBlb2Dk-muoOCGKU9eQbeQvNFKWY",
+            authDomain: "fun-pay-a2cf0.firebaseapp.com",
+            databaseURL: "https://fun-pay-a2cf0-default-rtdb.firebaseio.com",
+            projectId: "fun-pay-a2cf0",
+            storageBucket: "fun-pay-a2cf0.firebasestorage.app",
+            messagingSenderId: "238563276663",
+            appId: "1:238563276663:web:313b1cf7f5bd6dbd075372"
+        };
+        
         // Initialize Firebase
         firebase.initializeApp(firebaseConfig);
         const auth = firebase.auth();
@@ -216,6 +242,8 @@
         
         // Store last transaction for receipt
         let lastTransaction = null;
+        let currentRewardData = null; // For reward feature
+        let clickedTransaction = null; // For transaction popup
         
         // QR Code scanner instance
         let html5QrcodeScanner = null;
@@ -236,8 +264,12 @@
                 if (user) {
                     currentUser = user;
                     loadUserData(user.uid);
+                    // Check for reward link in URL after login
+                    checkForRewardLink();
                     showScreen('home');
                 } else {
+                    // If not logged in, still check for link to prompt login
+                    checkForRewardLink();
                     showScreen('welcome');
                 }
             });
@@ -249,14 +281,468 @@
                     updateBankName();
                 }
             });
+            
+            // Enable/disable proceed button based on disclaimer checkbox
+            const disclaimerCheck = document.getElementById('disclaimerCheck');
+            if (disclaimerCheck) {
+                disclaimerCheck.addEventListener('change', function() {
+                    const proceedBtn = document.getElementById('proceedBtn');
+                    if (proceedBtn) {
+                        proceedBtn.disabled = !this.checked;
+                    }
+                });
+            }
         });
 
-        // Generate unique account number
+        // --- REWARD FEATURE FUNCTIONS ---
+
+        function checkForRewardLink() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const rewardId = urlParams.get('rewardId');
+            if (rewardId) {
+                // User is not logged in, show login screen
+                if (!currentUser) {
+                    showScreen('signin');
+                    alert('Please sign in to claim this reward.');
+                    return;
+                }
+                // User is logged in, fetch reward data
+                database.ref('rewards/' + rewardId).once('value').then(snapshot => {
+                    if (snapshot.exists()) {
+                        const reward = snapshot.val();
+                        if (reward.status === 'completed') {
+                            alert('This reward has already been claimed.');
+                            window.history.replaceState({}, document.title, window.location.pathname);
+                            showScreen('home');
+                            return;
+                        }
+                        if (reward.userId === currentUser.uid) {
+                            alert('You cannot claim your own reward!');
+                            window.history.replaceState({}, document.title, window.location.pathname);
+                            showScreen('home');
+                            return;
+                        }
+                        currentRewardData = reward;
+                        displayClaimRewardScreen();
+                    } else {
+                        alert('Invalid or expired reward link.');
+                        window.history.replaceState({}, document.title, window.location.pathname);
+                        showScreen('home');
+                    }
+                });
+            }
+        }
+
+        function displayClaimRewardScreen() {
+            document.getElementById('rewardUserName').textContent = currentRewardData.userName;
+            document.getElementById('rewardUserAccount').textContent = currentRewardData.userAccount;
+            document.getElementById('rewardPaymentAmount').textContent = '₹' + currentRewardData.amount.toFixed(2);
+            showScreen('claimReward');
+        }
+
+        function generateRewardLink() {
+            const amount = parseFloat(document.getElementById('rewardAmount').value);
+            const description = document.getElementById('rewardDescription').value;
+
+            if (!amount || amount <= 0) {
+                alert('Please enter a valid amount.');
+                return;
+            }
+
+            const rewardId = 'RWD' + Date.now();
+            const baseUrl = window.location.origin + window.location.pathname;
+            const rewardLink = `${baseUrl}?rewardId=${rewardId}`;
+
+            database.ref('users/' + currentUser.uid).once('value').then(snapshot => {
+                const userData = snapshot.val();
+                const rewardData = {
+                    rewardId: rewardId,
+                    userId: currentUser.uid,
+                    userName: userData.displayName,
+                    userAccount: userData.accountNumber,
+                    amount: amount,
+                    description: description || 'Reward Payment',
+                    status: 'pending',
+                    createdAt: firebase.database.ServerValue.TIMESTAMP
+                };
+                database.ref('rewards/' + rewardId).set(rewardData).then(() => {
+                    document.getElementById('rewardLink').value = rewardLink;
+                    document.getElementById('generatedRewardLinkContainer').classList.remove('hidden');
+                });
+            });
+        }
+
+        function proceedWithRewardPayment() {
+            if (!currentRewardData) return;
+            showScreen('rewardPinVerification');
+        }
+
+        function verifyRewardPinAndPay() {
+            const pin = document.getElementById('rewardPinInput').value;
+            if (pin.length !== 4) {
+                alert('PIN must be 4 digits.');
+                return;
+            }
+
+            database.ref('users/' + currentUser.uid + '/pin').once('value').then(snapshot => {
+                if (snapshot.val() === pin) {
+                    processRewardPayment();
+                } else {
+                    alert('Invalid PIN. Please try again.');
+                    document.getElementById('rewardPinInput').value = '';
+                }
+            });
+        }
+
+        function processRewardPayment() {
+            const payerId = currentUser.uid;
+            const recipientId = currentRewardData.userId;
+            const amount = currentRewardData.amount;
+
+            database.ref('users/' + payerId).once('value').then(payerSnapshot => {
+                const payerData = payerSnapshot.val();
+                if (payerData.balance < amount) {
+                    alert('Insufficient balance.');
+                    return;
+                }
+                database.ref('users/' + recipientId).once('value').then(recipientSnapshot => {
+                    const recipientData = recipientSnapshot.val();
+                    const transactionId = 'TXN' + Date.now();
+
+                    const updates = {};
+                    // Update balances
+                    updates[`users/${payerId}/balance`] = payerData.balance - amount;
+                    updates[`users/${recipientId}/balance`] = recipientData.balance + amount;
+
+                    // Add transactions
+                    const debitTransaction = {
+                        transactionId, from: payerData.displayName, to: recipientData.displayName,
+                        amount, note: currentRewardData.description, timestamp: Date.now(),
+                        type: 'debit', paymentMethod: 'Reward Link'
+                    };
+                    const creditTransaction = { ...debitTransaction, type: 'credit' };
+                    updates[`transactions/${payerId}/${Date.now()}`] = debitTransaction;
+                    updates[`transactions/${recipientId}/${Date.now()}`] = creditTransaction;
+
+                    // Update reward status
+                    updates[`rewards/${currentRewardData.rewardId}/status`] = 'completed';
+                    updates[`rewards/${currentRewardData.rewardId}/completedBy`] = payerId;
+                    updates[`rewards/${currentRewardData.rewardId}/completedAt`] = firebase.database.ServerValue.TIMESTAMP;
+
+                    // Send notification
+                    updates[`notifications/${recipientId}/${Date.now()}`] = {
+                        title: 'Reward Received!',
+                        message: `${payerData.displayName} sent you ₹${amount.toFixed(2)} as a reward.`,
+                        timestamp: Date.now()
+                    };
+
+                    database.ref().update(updates).then(() => {
+                        showRewardPaymentSuccessScreen(transactionId);
+                    }).catch(error => {
+                        console.error("Payment failed:", error);
+                        alert('Payment failed. Please try again.');
+                    });
+                });
+            });
+        }
+
+        function showRewardPaymentSuccessScreen(transactionId) {
+            document.getElementById('rewardPaidTo').textContent = currentRewardData.userName;
+            document.getElementById('rewardPaidAmount').textContent = '₹' + currentRewardData.amount.toFixed(2);
+            document.getElementById('rewardPaidDescription').textContent = currentRewardData.description;
+            document.getElementById('rewardTransactionId').textContent = transactionId;
+            document.getElementById('rewardPaymentDate').textContent = formatDate(Date.now());
+            showScreen('rewardPaymentSuccess');
+        }
+        
+        function copyRewardDescription() {
+            const descriptionText = document.getElementById('rewardPaidDescription').textContent;
+            if (descriptionText) {
+                copyTextToClipboard(descriptionText);
+            }
+        }
+
+        function resetAndGoHome() {
+            currentRewardData = null;
+            document.getElementById('rewardPinInput').value = '';
+            window.history.replaceState({}, document.title, window.location.pathname);
+            showScreen('home');
+        }
+
+        function copyToClipboard(elementId) {
+            const textToCopy = document.getElementById(elementId).value;
+            copyTextToClipboard(textToCopy);
+        }
+        
+        function copyTextToClipboard(text) {
+            if (!navigator.clipboard) {
+                const textArea = document.createElement("textarea");
+                textArea.value = text;
+                textArea.style.position = "fixed";
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    alert('Copied to clipboard!');
+                } catch (err) {
+                    alert('Oops, unable to copy');
+                }
+                document.body.removeChild(textArea);
+                return;
+            }
+            navigator.clipboard.writeText(text).then(() => {
+                alert('Copied to clipboard!');
+            }, (err) => {
+                console.error('Could not copy text: ', err);
+                alert('Oops, unable to copy');
+            });
+        }
+
+        // --- TRANSACTION DETAILS FUNCTIONS ---
+
+        function showTransactionPopup(transaction) {
+            clickedTransaction = transaction;
+            
+            // Set popup data
+            const isCredit = transaction.type === 'credit' || transaction.type === 'request';
+            document.getElementById('popupIcon').className = isCredit ? 
+                'w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4' : 
+                'w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4';
+            
+            document.getElementById('popupIcon').innerHTML = isCredit ? 
+                '<i class="fas fa-arrow-down text-green-500 text-3xl"></i>' : 
+                '<i class="fas fa-arrow-up text-blue-500 text-3xl"></i>';
+            
+            document.getElementById('popupType').textContent = isCredit ? 'Money Received' : 'Money Sent';
+            document.getElementById('popupFrom').textContent = transaction.from;
+            document.getElementById('popupTo').textContent = transaction.to;
+            document.getElementById('popupAmount').textContent = '₹' + transaction.amount.toFixed(2);
+            document.getElementById('popupAmount').className = isCredit ? 
+                'font-medium big-amount text-green-500' : 
+                'font-medium big-amount text-blue-500';
+            document.getElementById('popupNote').textContent = transaction.note || 'No note provided';
+            document.getElementById('popupDate').textContent = formatDate(transaction.timestamp);
+            document.getElementById('popupStatus').textContent = 'Successful';
+            document.getElementById('popupStatus').className = 'font-medium text-green-500 text-right';
+            document.getElementById('popupTransactionId').textContent = transaction.transactionId || 'TXN' + transaction.timestamp;
+            
+            showScreen('transactionPopup');
+        }
+
+        function sharePopupTransaction() {
+            if (!clickedTransaction) return;
+            
+            const isCredit = clickedTransaction.type === 'credit' || clickedTransaction.type === 'request';
+            const transactionType = isCredit ? 'Received' : 'Sent';
+            
+            const shareText = `${transactionType} via Fun Pay!\n\n${isCredit ? 'From:' : 'To:'} ${isCredit ? clickedTransaction.from : clickedTransaction.to}\nAmount: ₹${clickedTransaction.amount.toFixed(2)}\nNote: ${clickedTransaction.note || 'Payment'}\nDate: ${formatDate(clickedTransaction.timestamp)}\nTransaction ID: ${clickedTransaction.transactionId || 'TXN' + clickedTransaction.timestamp}\nStatus: Successful\n\nThis is an educational transaction from Fun Pay - Educational Payment App`;
+            
+            if (navigator.share) {
+                navigator.share({
+                    title: `Fun Pay - ${transactionType}`,
+                    text: shareText
+                }).catch(err => console.log('Error sharing:', err));
+            } else {
+                navigator.clipboard.writeText(shareText).then(() => {
+                    alert('Transaction details copied to clipboard!');
+                }).catch(err => {
+                    console.error('Could not copy text: ', err);
+                    alert('Unable to share. Please try again.');
+                });
+            }
+        }
+
+        function showPopupAsPaymentSuccess() {
+            if (!clickedTransaction) return;
+            
+            // Set lastTransaction to the clicked one
+            lastTransaction = clickedTransaction;
+            
+            // Update success screen
+            document.getElementById('successRecipient').textContent = lastTransaction.to;
+            document.getElementById('successAmount').textContent = '₹' + lastTransaction.amount.toFixed(2);
+            document.getElementById('successNote').textContent = lastTransaction.note || 'Payment';
+            document.getElementById('successDate').textContent = formatDate(lastTransaction.timestamp);
+            document.getElementById('successTransactionId').textContent = lastTransaction.transactionId || 'TXN' + lastTransaction.timestamp;
+            
+            // Show success screen with animation
+            showScreen('paymentSuccess');
+            
+            const successIcon = document.getElementById('successIcon');
+            successIcon.classList.add('success-animation');
+            
+            setTimeout(() => {
+                successIcon.classList.remove('success-animation');
+            }, 1500);
+        }
+
+        function downloadPopupPDF() {
+            if (!clickedTransaction) return;
+            
+            // Temporarily set lastTransaction to clicked one
+            const originalTransaction = lastTransaction;
+            lastTransaction = clickedTransaction;
+            
+            downloadPDFReceipt();
+            
+            // Restore original lastTransaction
+            lastTransaction = originalTransaction;
+        }
+
+        // --- LONG PRESS TRANSACTION OPTIONS ---
+
+        function showDeleteTransactionConfirmation(transactionKey) {
+            transactionToDelete = transactionKey;
+            
+            // Get the transaction data
+            database.ref('transactions/' + currentUser.uid + '/' + transactionKey).once('value').then(snapshot => {
+                if (!snapshot.exists()) {
+                    cancelDeleteTransaction();
+                    return;
+                }
+                
+                const transaction = snapshot.val();
+                
+                // Create enhanced confirmation dialog
+                const confirmationDiv = document.createElement('div');
+                confirmationDiv.className = 'delete-confirmation';
+                confirmationDiv.id = 'deleteTransactionConfirmation';
+                
+                const isCredit = transaction.type === 'credit' || transaction.type === 'request';
+                const amountColor = isCredit ? 'text-green-600' : 'text-red-600';
+                const amountSign = isCredit ? '+' : '-';
+                
+                confirmationDiv.innerHTML = `
+                    <div class="delete-confirmation-content">
+                        <div class="mb-4">
+                            <h3 class="text-lg font-semibold text-gray-800 mb-3">Transaction Options</h3>
+                            
+                            <!-- Transaction Preview -->
+                            <div class="bg-blue-50 border border-blue-100 rounded-lg p-3 mb-4">
+                                <div class="flex justify-between items-start">
+                                    <div>
+                                        <p class="font-medium text-sm">${transaction.from === currentUser.displayName ? 'To: ' + transaction.to : 'From: ' + transaction.from}</p>
+                                        <p class="text-xs text-gray-600 mt-1">${transaction.note || 'No description'}</p>
+                                    </div>
+                                    <div class="text-right">
+                                        <p class="font-bold text-lg ${amountColor}">${amountSign}₹${transaction.amount.toFixed(2)}</p>
+                                        <p class="text-xs text-gray-500 mt-1">${formatDate(transaction.timestamp).split(' ')[0]}</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Action Buttons -->
+                        <div class="space-y-3">
+                            <button onclick="showTransactionDetailsFromPopup(${JSON.stringify(transaction).replace(/"/g, '&quot;')})" 
+                                    class="w-full bg-blue-500 text-white py-3 px-4 rounded-lg font-medium hover:bg-blue-600 transition flex items-center justify-center">
+                                <i class="fas fa-info-circle mr-2"></i>
+                                View Transaction Details
+                            </button>
+                            
+                            <div class="pt-3 border-t border-gray-200">
+                                <p class="text-sm text-gray-600 mb-3 text-center">Want to remove this transaction?</p>
+                                <div class="flex space-x-3">
+                                    <button onclick="cancelDeleteTransaction()" 
+                                            class="flex-1 bg-gray-200 text-gray-700 py-2 rounded-lg font-medium hover:bg-gray-300 transition">
+                                        Cancel
+                                    </button>
+                                    <button onclick="deleteTransaction()" 
+                                            class="flex-1 bg-red-500 text-white py-2 rounded-lg font-medium hover:bg-red-600 transition flex items-center justify-center">
+                                        <i class="fas fa-trash mr-2"></i>
+                                        Delete
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+                document.body.appendChild(confirmationDiv);
+            }).catch(error => {
+                console.error('Error loading transaction:', error);
+                cancelDeleteTransaction();
+            });
+        }
+
+        // Helper function to show transaction details from popup
+        function showTransactionDetailsFromPopup(transaction) {
+            // Close the delete confirmation
+            cancelDeleteTransaction();
+            
+            // Set the clicked transaction
+            clickedTransaction = transaction;
+            
+            // Show the transaction popup
+            showScreen('transactionPopup');
+            
+            // Update popup with transaction data
+            const isCredit = transaction.type === 'credit' || transaction.type === 'request';
+            document.getElementById('popupIcon').className = isCredit ? 
+                'w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4' : 
+                'w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4';
+            
+            document.getElementById('popupIcon').innerHTML = isCredit ? 
+                '<i class="fas fa-arrow-down text-green-500 text-3xl"></i>' : 
+                '<i class="fas fa-arrow-up text-blue-500 text-3xl"></i>';
+            
+            document.getElementById('popupType').textContent = isCredit ? 'Money Received' : 'Money Sent';
+            document.getElementById('popupFrom').textContent = transaction.from;
+            document.getElementById('popupTo').textContent = transaction.to;
+            document.getElementById('popupAmount').textContent = '₹' + transaction.amount.toFixed(2);
+            document.getElementById('popupAmount').className = isCredit ? 
+                'font-medium big-amount text-green-500' : 
+                'font-medium big-amount text-blue-500';
+            document.getElementById('popupNote').textContent = transaction.note || 'No note provided';
+            document.getElementById('popupDate').textContent = formatDate(transaction.timestamp);
+            document.getElementById('popupStatus').textContent = 'Successful';
+            document.getElementById('popupStatus').className = 'font-medium text-green-500 text-right';
+            document.getElementById('popupTransactionId').textContent = transaction.transactionId || 'TXN' + transaction.timestamp;
+        }
+
+        // --- EXISTING APP FUNCTIONS ---
+
+        function showScreen(screenId) {
+            document.querySelectorAll('.screen').forEach(screen => {
+                screen.classList.remove('active');
+            });
+            document.getElementById(screenId).classList.add('active');
+            
+            // Update navigation
+            document.querySelectorAll('.nav-btn').forEach(btn => {
+                btn.classList.remove('text-blue-600');
+                btn.classList.add('text-gray-500');
+            });
+            
+            if (screenId === 'home') {
+                document.getElementById('homeNavBtn').classList.add('text-blue-600');
+                document.getElementById('homeNavBtn').classList.remove('text-gray-500');
+            } else if (screenId === 'history') {
+                document.getElementById('historyNavBtn').classList.add('text-blue-600');
+                document.getElementById('historyNavBtn').classList.remove('text-gray-500');
+            } else if (screenId === 'profile') {
+                document.getElementById('profileNavBtn').classList.add('text-blue-600');
+                document.getElementById('profileNavBtn').classList.remove('text-gray-500');
+            }
+            
+            // Stop QR scanner when leaving scan screen
+            if (screenId !== 'scanQR' && html5QrcodeScanner) {
+                html5QrcodeScanner.stop();
+            }
+            
+            // Load data for specific screens
+            if (screenId === 'history') {
+                loadHistoryTransactions();
+            } else if (screenId === 'changeName') {
+                loadCurrentProfileName();
+            }
+        }
+
         function generateAccountNumber() {
             return 'FP' + Math.random().toString(36).substr(2, 9).toUpperCase();
         }
 
-        // Load user data
         function loadUserData(uid) {
             database.ref('users/' + uid).once('value').then(snapshot => {
                 if (snapshot.exists()) {
@@ -286,12 +772,10 @@
             loadNotifications(uid);
         }
 
-        // Format card number
         function formatCardNumber(number) {
             return number.replace(/(\w{4})(\w{4})(\w{4})(\w{4})/, '$1 $2 $3 $4');
         }
 
-        // Load transactions
         function loadTransactions(uid) {
             const transactionsRef = database.ref('transactions/' + uid);
             transactionsRef.orderByChild('timestamp').limitToLast(10).on('value', snapshot => {
@@ -311,7 +795,6 @@
             });
         }
 
-        // Create transaction element
         function createTransactionElement(transaction, key) {
             const div = document.createElement('div');
             div.className = 'transaction-item p-3 border-b border-gray-100 cursor-pointer fade-in';
@@ -328,7 +811,7 @@
                             <i class="fas ${icon}"></i>
                         </div>
                         <div>
-                            <p class="font-medium text-sm">${name}</p>
+                            <p class="font-medium text-sm">${name} ${transaction.paymentMethod === 'Reward Link' ? '<span class="reward-badge">REWARD</span>' : ''}</p>
                             <p class="text-xs text-gray-500">${transaction.note || 'Payment'}</p>
                         </div>
                     </div>
@@ -341,10 +824,15 @@
                 </div>
             `;
             
-            // Add click event for transaction details
-            div.addEventListener('click', () => showTransactionDetails(transaction));
+            // Click event for direct view (if needed)
+            div.addEventListener('click', (e) => {
+                // Check if it was a long press (we'll handle long press separately)
+                if (!longPressTimer) {
+                    showTransactionPopup(transaction);
+                }
+            });
             
-            // Add long press event for delete option
+            // Add long press event
             div.addEventListener('mousedown', startLongPress);
             div.addEventListener('touchstart', startLongPress);
             div.addEventListener('mouseup', cancelLongPress);
@@ -354,7 +842,6 @@
             return div;
         }
         
-        // Start long press timer
         function startLongPress(e) {
             e.preventDefault();
             const transactionEl = e.currentTarget;
@@ -366,47 +853,17 @@
             }, 800);
         }
         
-        // Cancel long press timer
         function cancelLongPress() {
             if (longPressTimer) {
                 clearTimeout(longPressTimer);
                 longPressTimer = null;
             }
             
-            // Remove long press class from all transaction items
             document.querySelectorAll('.transaction-item').forEach(item => {
                 item.classList.remove('long-press');
             });
         }
         
-        // Show delete transaction confirmation
-        function showDeleteTransactionConfirmation(transactionKey) {
-            transactionToDelete = transactionKey;
-            
-            // Create confirmation dialog
-            const confirmationDiv = document.createElement('div');
-            confirmationDiv.className = 'delete-confirmation';
-            confirmationDiv.id = 'deleteTransactionConfirmation';
-            
-            confirmationDiv.innerHTML = `
-                <div class="delete-confirmation-content">
-                    <h3 class="text-lg font-semibold mb-4">Delete Transaction</h3>
-                    <p class="text-sm text-gray-600 mb-6">Are you sure you want to delete this transaction? This action cannot be undone.</p>
-                    <div class="flex space-x-3">
-                        <button onclick="cancelDeleteTransaction()" class="flex-1 bg-gray-200 text-gray-700 py-2 rounded-lg font-medium">
-                            Cancel
-                        </button>
-                        <button onclick="deleteTransaction()" class="flex-1 bg-red-500 text-white py-2 rounded-lg font-medium">
-                            Delete
-                        </button>
-                    </div>
-                </div>
-            `;
-            
-            document.body.appendChild(confirmationDiv);
-        }
-        
-        // Cancel delete transaction
         function cancelDeleteTransaction() {
             const confirmationDiv = document.getElementById('deleteTransactionConfirmation');
             if (confirmationDiv) {
@@ -415,16 +872,12 @@
             transactionToDelete = null;
         }
         
-        // Delete transaction
         function deleteTransaction() {
             if (!transactionToDelete) return;
             
             database.ref('transactions/' + currentUser.uid + '/' + transactionToDelete).remove()
                 .then(() => {
-                    // Show success message
                     alert('Transaction deleted successfully');
-                    
-                    // Remove confirmation dialog
                     cancelDeleteTransaction();
                 })
                 .catch(error => {
@@ -433,7 +886,6 @@
                 });
         }
 
-        // Load notifications
         function loadNotifications(uid) {
             const notificationsRef = database.ref('notifications/' + uid);
             notificationsRef.orderByChild('timestamp').limitToLast(10).on('value', snapshot => {
@@ -453,7 +905,6 @@
             });
         }
 
-        // Create notification element
         function createNotificationElement(notification) {
             const div = document.createElement('div');
             div.className = 'p-3 border-b border-gray-100 fade-in';
@@ -474,37 +925,6 @@
             return div;
         }
 
-        // Show screen
-        function showScreen(screenId) {
-            document.querySelectorAll('.screen').forEach(screen => {
-                screen.classList.remove('active');
-            });
-            document.getElementById(screenId).classList.add('active');
-            
-            // Update navigation
-            document.querySelectorAll('.nav-btn').forEach(btn => {
-                btn.classList.remove('text-blue-600');
-                btn.classList.add('text-gray-500');
-            });
-            
-            if (screenId === 'home') {
-                document.getElementById('homeNavBtn').classList.add('text-blue-600');
-                document.getElementById('homeNavBtn').classList.remove('text-gray-500');
-            } else if (screenId === 'history') {
-                document.getElementById('historyNavBtn').classList.add('text-blue-600');
-                document.getElementById('historyNavBtn').classList.remove('text-gray-500');
-            } else if (screenId === 'profile') {
-                document.getElementById('profileNavBtn').classList.add('text-blue-600');
-                document.getElementById('profileNavBtn').classList.remove('text-gray-500');
-            }
-            
-            // Stop QR scanner when leaving scan screen
-            if (screenId !== 'scanQR' && html5QrcodeScanner) {
-                html5QrcodeScanner.stop();
-            }
-        }
-
-        // Sign up user
         function signUpUser() {
             const email = document.getElementById('signupEmail').value;
             const password = document.getElementById('signupPassword').value;
@@ -534,7 +954,6 @@
                     const accountNumber = generateAccountNumber();
                     const expiryDate = '12/' + (new Date().getFullYear() + 5).toString().substr(2);
                     
-                    // Create user in database
                     database.ref('users/' + user.uid).set({
                         uid: user.uid,
                         email: email,
@@ -542,12 +961,11 @@
                         accountNumber: accountNumber,
                         pin: pin,
                         expiryDate: expiryDate,
-                        balance: 1000, // Starting balance
+                        balance: 1000,
                         profileIcon: appSettings.defaultProfileIcon,
                         createdAt: Date.now()
                     });
                     
-                    // Send welcome notification
                     database.ref('notifications/' + user.uid).push({
                         title: 'Welcome to Fun Pay!',
                         message: `Your account ${accountNumber} has been created with ₹1000 starting balance.`,
@@ -561,7 +979,6 @@
                 });
         }
 
-        // Sign in
         function signIn() {
             const email = document.getElementById('signinEmail').value;
             const password = document.getElementById('signinPassword').value;
@@ -574,7 +991,6 @@
             
             auth.signInWithEmailAndPassword(email, password)
                 .then(userCredential => {
-                    // Verify account number
                     return database.ref('users/' + userCredential.user.uid).once('value');
                 })
                 .then(snapshot => {
@@ -590,12 +1006,10 @@
                 });
         }
 
-        // Sign out
         function signOut() {
             auth.signOut();
         }
 
-        // Verify PIN for transactions
         function verifyPin(callback) {
             const pin = prompt('Enter your 4-digit PIN:');
             if (pin && pin.length === 4) {
@@ -609,7 +1023,6 @@
             }
         }
 
-        // Send money
         function sendMoney() {
             const recipient = document.getElementById('recipient').value;
             const amount = parseFloat(document.getElementById('amount').value);
@@ -621,7 +1034,6 @@
             }
             
             verifyPin(() => {
-                // Get current user balance
                 database.ref('users/' + currentUser.uid).once('value').then(snapshot => {
                     const userData = snapshot.val();
                     
@@ -630,7 +1042,6 @@
                         return;
                     }
                     
-                    // Find recipient by account number or email
                     database.ref('users').orderByChild('accountNumber').equalTo(recipient).once('value').then(recipientSnapshot => {
                         if (!recipientSnapshot.exists()) {
                             database.ref('users').orderByChild('email').equalTo(recipient).once('value').then(emailSnapshot => {
@@ -648,20 +1059,16 @@
             });
         }
 
-        // Process transaction
         function processTransaction(recipientData, amount, note, senderData) {
             const recipientId = Object.keys(recipientData)[0];
             const recipient = recipientData[recipientId];
             
-            // Update balances
             const updates = {};
             updates['users/' + currentUser.uid + '/balance'] = senderData.balance - amount;
             updates['users/' + recipientId + '/balance'] = recipient.balance + amount;
             
-            // Generate transaction ID
             const transactionId = 'TXN' + Date.now();
             
-            // Add transactions
             const transactionData = {
                 transactionId: transactionId,
                 from: senderData.displayName,
@@ -677,14 +1084,12 @@
             const creditTransaction = { ...transactionData, type: 'credit' };
             updates['transactions/' + recipientId + '/' + Date.now()] = creditTransaction;
             
-            // Send notification to recipient
             updates['notifications/' + recipientId + '/' + Date.now()] = {
                 title: 'Money Received',
                 message: `${senderData.displayName} sent you ₹${amount.toFixed(2)}`,
                 timestamp: Date.now()
             };
             
-            // Store transaction for receipt
             lastTransaction = {
                 ...transactionData,
                 senderAccountNumber: senderData.accountNumber,
@@ -692,43 +1097,34 @@
                 transactionId: transactionId
             };
             
-            // Update database
             database.ref().update(updates).then(() => {
-                // Clear form
                 document.getElementById('recipient').value = '';
                 document.getElementById('amount').value = '';
                 document.getElementById('note').value = '';
                 
-                // Show success screen
                 showPaymentSuccess();
             });
         }
 
-        // Show payment success screen
         function showPaymentSuccess() {
             if (!lastTransaction) return;
             
-            // Update success screen with transaction details
             document.getElementById('successRecipient').textContent = lastTransaction.to;
             document.getElementById('successAmount').textContent = '₹' + lastTransaction.amount.toFixed(2);
             document.getElementById('successNote').textContent = lastTransaction.note || 'Payment';
             document.getElementById('successDate').textContent = formatDate(lastTransaction.timestamp);
             document.getElementById('successTransactionId').textContent = lastTransaction.transactionId;
             
-            // Show the screen with animation
             showScreen('paymentSuccess');
             
-            // Add animation class
             const successIcon = document.getElementById('successIcon');
             successIcon.classList.add('success-animation');
             
-            // Remove animation class after animation completes
             setTimeout(() => {
                 successIcon.classList.remove('success-animation');
             }, 1500);
         }
 
-        // Share transaction
         function shareTransaction() {
             if (!lastTransaction) return;
             
@@ -740,7 +1136,6 @@
                     text: shareText
                 }).catch(err => console.log('Error sharing:', err));
             } else {
-                // Fallback - copy to clipboard
                 navigator.clipboard.writeText(shareText).then(() => {
                     alert('Transaction details copied to clipboard!');
                 }).catch(err => {
@@ -750,28 +1145,24 @@
             }
         }
 
-        // Download PDF receipt
         function downloadPDFReceipt() {
             if (!lastTransaction) return;
             
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF();
             
-            // Add logo/header
             doc.setFontSize(20);
-            doc.setTextColor(66, 133, 244); // Blue color
+            doc.setTextColor(66, 133, 244);
             doc.text('Fun Pay', 105, 20, { align: 'center' });
             
             doc.setFontSize(12);
             doc.setTextColor(100);
             doc.text('Educational Payment Platform', 105, 27, { align: 'center' });
             
-            // Add receipt title
             doc.setFontSize(16);
             doc.setTextColor(0);
             doc.text('Payment Receipt', 105, 40, { align: 'center' });
             
-            // Add transaction details
             doc.setFontSize(12);
             doc.text('Transaction Details', 20, 55);
             
@@ -780,7 +1171,6 @@
             doc.text(`Date: ${formatDate(lastTransaction.timestamp)}`, 20, 72);
             doc.text(`Status: Successful`, 20, 79);
             
-            // Add payment details
             doc.setFontSize(12);
             doc.text('Payment Details', 20, 95);
             
@@ -790,17 +1180,14 @@
             doc.text(`Amount: ₹${lastTransaction.amount.toFixed(2)}`, 20, 119);
             doc.text(`Note: ${lastTransaction.note || 'Payment'}`, 20, 126);
             
-            // Add footer
             doc.setFontSize(8);
             doc.setTextColor(150);
             doc.text('This is an educational receipt. No real money was involved.', 105, 280, { align: 'center' });
             doc.text('© 2023 Fun Pay - Educational Platform', 105, 285, { align: 'center' });
             
-            // Save the PDF
             doc.save(`FunPay_Receipt_${lastTransaction.transactionId}.pdf`);
         }
 
-        // Request money
         function requestMoney() {
             const recipient = document.getElementById('requestRecipient').value;
             const amount = parseFloat(document.getElementById('requestAmount').value);
@@ -811,7 +1198,6 @@
                 return;
             }
             
-            // Find recipient
             database.ref('users').orderByChild('accountNumber').equalTo(recipient).once('value').then(recipientSnapshot => {
                 if (!recipientSnapshot.exists()) {
                     database.ref('users').orderByChild('email').equalTo(recipient).once('value').then(emailSnapshot => {
@@ -827,12 +1213,10 @@
             });
         }
 
-        // Process request
         function processRequest(recipientData, amount, note) {
             const recipientId = Object.keys(recipientData)[0];
             const recipient = recipientData[recipientId];
             
-            // Send notification to recipient
             database.ref('notifications/' + recipientId).push({
                 title: 'Money Request',
                 message: `${currentUser.displayName} requested ₹${amount.toFixed(2)}`,
@@ -850,7 +1234,6 @@
             showScreen('home');
         }
 
-        // Upload profile picture
         function uploadProfilePicture() {
             const file = document.getElementById('profilePictureInput').files[0];
             
@@ -861,7 +1244,6 @@
             
             uploadTask.on('state_changed', 
                 (snapshot) => {
-                    // Progress indicator
                     const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
                     console.log('Upload is ' + progress + '% done');
                 },
@@ -869,9 +1251,7 @@
                     alert(error.message);
                 },
                 () => {
-                    // Get download URL
                     uploadTask.snapshot.ref.getDownloadURL().then((downloadURL) => {
-                        // Update user profile
                         database.ref('users/' + currentUser.uid + '/profileIcon').set(downloadURL);
                         document.getElementById('profileIcon').src = downloadURL;
                         document.getElementById('homeProfileIcon').src = downloadURL;
@@ -880,36 +1260,6 @@
             );
         }
 
-        // Show transaction details
-        function showTransactionDetails(transaction) {
-            document.getElementById('detailFrom').textContent = transaction.from;
-            document.getElementById('detailTo').textContent = transaction.to;
-            document.getElementById('detailAmount').textContent = '₹' + transaction.amount.toFixed(2);
-            document.getElementById('detailNote').textContent = transaction.note || 'No note';
-            document.getElementById('detailDate').textContent = formatDate(transaction.timestamp);
-            document.getElementById('detailType').textContent = transaction.type === 'credit' ? 'Received' : 'Sent';
-            document.getElementById('detailType').className = transaction.type === 'credit' ? 'text-green-500' : 'text-red-500';
-            
-            // Add transaction ID if available
-            if (transaction.transactionId) {
-                document.getElementById('detailTransactionId').textContent = transaction.transactionId;
-                document.getElementById('detailTransactionIdRow').style.display = 'flex';
-            } else {
-                document.getElementById('detailTransactionIdRow').style.display = 'none';
-            }
-            
-            // Show success message
-            const successMessage = document.getElementById('transactionSuccessMessage');
-            successMessage.style.display = 'flex';
-            
-            // Update success message text based on transaction type
-            const successText = transaction.type === 'credit' ? 'Money received successfully!' : 'Money sent successfully!';
-            document.getElementById('successMessageText').textContent = successText;
-            
-            showScreen('transactionDetails');
-        }
-
-        // Change PIN
         function changePin() {
             const currentPin = document.getElementById('currentPin').value;
             const newPin = document.getElementById('newPin').value;
@@ -930,10 +1280,8 @@
                 return;
             }
             
-            // Verify current PIN
             database.ref('users/' + currentUser.uid + '/pin').once('value').then(snapshot => {
                 if (snapshot.val() === currentPin) {
-                    // Update PIN
                     database.ref('users/' + currentUser.uid + '/pin').set(newPin).then(() => {
                         alert('PIN changed successfully!');
                         document.getElementById('currentPin').value = '';
@@ -947,13 +1295,11 @@
             });
         }
 
-        // Update bank name in UI
         function updateBankName() {
             document.getElementById('bankName').textContent = appSettings.bankName;
             document.getElementById('homeBankName').textContent = appSettings.bankName;
         }
 
-        // Utility functions
         function formatDate(timestamp) {
             const date = new Date(timestamp);
             return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -961,17 +1307,13 @@
         
         // QR Code Functions
         
-        // Generate QR Code
         function generateQRCode() {
-            // Get current user data
             database.ref('users/' + currentUser.uid).once('value').then(snapshot => {
                 if (snapshot.exists()) {
                     const userData = snapshot.val();
                     
-                    // Clear previous QR code if exists
                     document.getElementById('qrcode').innerHTML = '';
                     
-                    // Create QR code data
                     const qrData = JSON.stringify({
                         uid: userData.uid,
                         accountNumber: userData.accountNumber,
@@ -979,7 +1321,6 @@
                         bankName: appSettings.bankName
                     });
                     
-                    // Generate QR code
                     new QRCode(document.getElementById('qrcode'), {
                         text: qrData,
                         width: 200,
@@ -989,27 +1330,22 @@
                         correctLevel: QRCode.CorrectLevel.H
                     });
                     
-                    // Update QR code screen with user details
                     document.getElementById('qrAccountNumber').textContent = userData.accountNumber;
                     document.getElementById('qrDisplayName').textContent = userData.displayName;
                     document.getElementById('qrBankName').textContent = appSettings.bankName;
                     
-                    // Show QR code screen
                     showScreen('showQR');
                 }
             });
         }
         
-        // Start QR Scanner
         function startQRScanner() {
             showScreen('scanQR');
             
-            // Initialize scanner if not already initialized
             if (!html5QrcodeScanner) {
                 html5QrcodeScanner = new Html5Qrcode("qr-reader");
             }
             
-            // Start scanning
             html5QrcodeScanner.start(
                 { facingMode: "environment" },
                 {
@@ -1017,17 +1353,10 @@
                     qrbox: { width: 250, height: 250 }
                 },
                 (decodedText, decodedResult) => {
-                    // QR code scanned successfully
                     try {
                         const userData = JSON.parse(decodedText);
-                        
-                        // Store scanned user data
                         scannedUserData = userData;
-                        
-                        // Stop scanner
                         html5QrcodeScanner.stop();
-                        
-                        // Show payment screen with scanned user data
                         showQRPaymentScreen(userData);
                     } catch (error) {
                         alert('QR SCANNED');
@@ -1042,21 +1371,14 @@
             });
         }
         
-        // Show QR payment screen
         function showQRPaymentScreen(userData) {
-            // Update payment screen with user details
             document.getElementById('qrPayAccountNumber').textContent = userData.accountNumber;
             document.getElementById('qrPayDisplayName').textContent = userData.displayName;
             document.getElementById('qrPayBankName').textContent = userData.bankName;
-            
-            // Clear previous amount
             document.getElementById('qrPayAmount').value = '';
-            
-            // Show payment screen
             showScreen('qrPay');
         }
         
-        // Process QR payment
         function processQRPayment() {
             const amount = parseFloat(document.getElementById('qrPayAmount').value);
             
@@ -1065,9 +1387,7 @@
                 return;
             }
             
-            // Verify PIN
             verifyPin(() => {
-                // Get current user balance
                 database.ref('users/' + currentUser.uid).once('value').then(snapshot => {
                     const userData = snapshot.val();
                     
@@ -1076,12 +1396,9 @@
                         return;
                     }
                     
-                    // Get recipient data
                     database.ref('users/' + scannedUserData.uid).once('value').then(recipientSnapshot => {
                         if (recipientSnapshot.exists()) {
                             const recipientData = recipientSnapshot.val();
-                            
-                            // Process transaction
                             processQRTransaction(recipientData, amount, userData);
                         } else {
                             alert('Recipient account not found');
@@ -1091,17 +1408,13 @@
             });
         }
         
-        // Process QR transaction
         function processQRTransaction(recipientData, amount, senderData) {
-            // Update balances
             const updates = {};
             updates['users/' + currentUser.uid + '/balance'] = senderData.balance - amount;
             updates['users/' + recipientData.uid + '/balance'] = recipientData.balance + amount;
             
-            // Generate transaction ID
             const transactionId = 'TXN' + Date.now();
             
-            // Add transactions
             const transactionData = {
                 transactionId: transactionId,
                 from: senderData.displayName,
@@ -1118,14 +1431,12 @@
             const creditTransaction = { ...transactionData, type: 'credit' };
             updates['transactions/' + recipientData.uid + '/' + Date.now()] = creditTransaction;
             
-            // Send notification to recipient
             updates['notifications/' + recipientData.uid + '/' + Date.now()] = {
                 title: 'Money Received',
                 message: `${senderData.displayName} sent you ₹${amount.toFixed(2)} via QR Code`,
                 timestamp: Date.now()
             };
             
-            // Store transaction for receipt
             lastTransaction = {
                 ...transactionData,
                 senderAccountNumber: senderData.accountNumber,
@@ -1133,17 +1444,12 @@
                 transactionId: transactionId
             };
             
-            // Update database
             database.ref().update(updates).then(() => {
-                // Clear form
                 document.getElementById('qrPayAmount').value = '';
-                
-                // Show success screen
                 showPaymentSuccess();
             });
         }
         
-        // Change Profile Name
         function changeProfileName() {
             const newName = document.getElementById('newProfileName').value;
             
@@ -1152,24 +1458,16 @@
                 return;
             }
             
-            // Update user profile in Firebase Auth
             currentUser.updateProfile({ displayName: newName })
                 .then(() => {
-                    // Update user profile in database
                     database.ref('users/' + currentUser.uid + '/displayName').set(newName)
                         .then(() => {
-                            // Update UI
                             document.getElementById('userName').textContent = newName;
                             document.getElementById('profileName').textContent = newName;
                             document.getElementById('cardHolderName').textContent = newName.toUpperCase();
                             
-                            // Clear form
                             document.getElementById('newProfileName').value = '';
-                            
-                            // Show success message
                             alert('Profile name updated successfully!');
-                            
-                            // Go back to profile screen
                             showScreen('profile');
                         })
                         .catch(error => {
@@ -1181,7 +1479,6 @@
                 });
         }
         
-        // Load current profile name in change name screen
         function loadCurrentProfileName() {
             database.ref('users/' + currentUser.uid + '/displayName').once('value').then(snapshot => {
                 if (snapshot.exists()) {
@@ -1190,7 +1487,6 @@
             });
         }
         
-        // Delete Account
         function deleteAccount() {
             const confirmationText = document.getElementById('deleteConfirmationText').value;
             
@@ -1199,25 +1495,19 @@
                 return;
             }
             
-            // Get user data for confirmation
             database.ref('users/' + currentUser.uid).once('value').then(snapshot => {
                 if (snapshot.exists()) {
                     const userData = snapshot.val();
                     
-                    // Confirm deletion with user details
                     const confirmMessage = `Are you sure you want to permanently delete your account?\n\nAccount Number: ${userData.accountNumber}\nName: ${userData.displayName}\nBalance: ₹${userData.balance.toFixed(2)}\n\nThis action cannot be undone.`;
                     
                     if (confirm(confirmMessage)) {
-                        // Delete user data from database
                         database.ref('users/' + currentUser.uid).remove()
                             .then(() => {
-                                // Delete user transactions
                                 database.ref('transactions/' + currentUser.uid).remove()
                                     .then(() => {
-                                        // Delete user notifications
                                         database.ref('notifications/' + currentUser.uid).remove()
                                             .then(() => {
-                                                // Delete user from Firebase Auth
                                                 currentUser.delete()
                                                     .then(() => {
                                                         alert('Your account has been permanently deleted');
@@ -1243,6 +1533,25 @@
                                 alert('Error deleting account. Please try again.');
                             });
                     }
+                }
+            });
+        }
+        
+        function loadHistoryTransactions() {
+            const transactionsRef = database.ref('transactions/' + currentUser.uid);
+            transactionsRef.orderByChild('timestamp').limitToLast(20).on('value', snapshot => {
+                const transactionsList = document.getElementById('historyTransactionsList');
+                transactionsList.innerHTML = '';
+                
+                if (snapshot.exists()) {
+                    const transactions = snapshot.val();
+                    Object.keys(transactions).reverse().forEach(key => {
+                        const transaction = transactions[key];
+                        const transactionEl = createTransactionElement(transaction, key);
+                        transactionsList.appendChild(transactionEl);
+                    });
+                } else {
+                    transactionsList.innerHTML = '<p class="text-gray-500 text-center py-4">No transactions yet</p>';
                 }
             });
         }
@@ -1457,6 +1766,16 @@
                         <span class="text-xs text-gray-700">Card</span>
                     </button>
                 </div>
+                
+                <!-- NEW REWARD BUTTON -->
+                <div class="grid grid-cols-4 gap-4 mt-4">
+                    <button onclick="showScreen('requestReward')" class="flex flex-col items-center p-3 bg-white rounded-xl shadow-sm hover:shadow-md transition">
+                        <div class="w-12 h-12 bg-pink-100 rounded-full flex items-center justify-center mb-2">
+                            <i class="fas fa-gift text-pink-500"></i>
+                        </div>
+                        <span class="text-xs text-gray-700">Reward</span>
+                    </button>
+                </div>
             </div>
             
             <!-- Recent Transactions -->
@@ -1499,6 +1818,233 @@
                     <i class="fas fa-user text-xl mb-1"></i>
                     <span class="text-xs">Profile</span>
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- NEW: Request Reward Screen -->
+    <div id="requestReward" class="screen">
+        <div class="phone-container bg-white">
+            <!-- Header -->
+            <div class="bg-pink-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('home')" class="mr-3">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Request Reward</h2>
+            </div>
+            
+            <!-- Reward Form -->
+            <div class="p-6">
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Reward Amount (₹)</label>
+                    <input type="number" id="rewardAmount" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500" placeholder="Enter amount">
+                </div>
+                
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Reward Description</label>
+                    <input type="text" id="rewardDescription" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500" placeholder="What's this reward for?">
+                </div>
+                
+                <button onclick="generateRewardLink()" class="w-full bg-pink-500 text-white py-3 rounded-lg font-medium hover:bg-pink-600 transition">
+                    Generate Reward Link
+                </button>
+                
+                <div id="generatedRewardLinkContainer" class="hidden mt-6 bg-gray-50 rounded-xl p-4">
+                    <p class="text-sm text-gray-600 mb-2">Your reward link:</p>
+                    <div class="flex items-center bg-white p-2 rounded border">
+                        <input type="text" id="rewardLink" class="flex-1 bg-transparent outline-none text-sm" readonly>
+                        <button onclick="copyToClipboard('rewardLink')" class="ml-2 text-pink-500 font-medium">Copy</button>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-2">Share this link with others to receive your reward.</p>
+                </div>
+                
+                <div class="mt-4 p-3 bg-yellow-50 rounded-lg">
+                    <p class="text-xs text-yellow-700">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        When someone clicks your reward link, they'll be asked to pay the specified amount to you.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- NEW: Claim Reward Screen -->
+    <div id="claimReward" class="screen">
+        <div class="phone-container bg-white">
+            <!-- Header -->
+            <div class="bg-pink-500 text-white p-4 flex items-center">
+                <button onclick="window.history.back();" class="mr-3">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Reward Payment</h2>
+            </div>
+            
+            <!-- Reward Details -->
+            <div class="p-6">
+                <div class="bg-white rounded-xl shadow-sm p-4 mb-6">
+                    <div class="flex items-center mb-4">
+                        <img id="rewardUserIcon" src="https://picsum.photos/seed/default/200/200.jpg" class="w-16 h-16 rounded-full mr-4">
+                        <div>
+                            <h3 id="rewardUserName" class="font-semibold text-lg">User Name</h3>
+                            <p id="rewardUserAccount" class="text-sm text-gray-500">Account Number</p>
+                        </div>
+                    </div>
+                    
+                    <div class="border-t pt-4">
+                        <div class="flex justify-between mb-4">
+                            <span class="text-gray-600">Reward Amount:</span>
+                            <span id="rewardPaymentAmount" class="font-semibold text-lg text-pink-500">₹0.00</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <button onclick="proceedWithRewardPayment()" class="w-full bg-pink-500 text-white py-3 rounded-lg font-medium hover:bg-pink-600 transition">
+                    Continue to Pay
+                </button>
+                
+                <div class="mt-4 p-3 bg-blue-50 rounded-lg">
+                    <p class="text-xs text-blue-700">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        You'll be asked to enter your PIN to complete this payment.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- NEW: Reward PIN Verification Screen -->
+    <div id="rewardPinVerification" class="screen">
+        <div class="phone-container bg-white">
+            <!-- Header -->
+            <div class="bg-pink-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('claimReward')" class="mr-3">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Enter PIN</h2>
+            </div>
+            
+            <!-- PIN Form -->
+            <div class="p-6">
+                <p class="text-center text-gray-600 mb-6">Enter your 4-digit PIN to complete this payment</p>
+                
+                <div class="flex justify-center mb-8">
+                    <input type="password" id="rewardPinInput" maxlength="4" class="pin-input w-48 text-center text-2xl border-b-2 border-gray-300 focus:border-pink-500 outline-none">
+                </div>
+                
+                <button onclick="verifyRewardPinAndPay()" class="w-full bg-pink-500 text-white py-3 rounded-lg font-medium hover:bg-pink-600 transition">
+                    Verify PIN & Pay
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- NEW: Reward Payment Success Screen -->
+    <div id="rewardPaymentSuccess" class="screen">
+        <div class="phone-container bg-white">
+            <div class="flex flex-col items-center justify-center min-h-screen p-6">
+                <div class="mb-8 text-center">
+                    <div class="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <i id="rewardSuccessIcon" class="fas fa-check text-green-500 text-3xl success-animation"></i>
+                    </div>
+                    <h2 class="text-2xl font-bold text-gray-800">Payment Successful!</h2>
+                    <p class="text-gray-600 mt-1">Your reward has been sent successfully.</p>
+                </div>
+                
+                <div class="w-full bg-gray-50 rounded-xl p-6 mb-6">
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">Paid to:</span>
+                        <span class="font-medium" id="rewardPaidTo">User Name</span>
+                    </div>
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">Amount:</span>
+                        <span class="font-medium big-amount text-pink-500" id="rewardPaidAmount">₹0.00</span>
+                    </div>
+                    <div class="flex justify-between items-center mb-3">
+                        <span class="text-gray-600">Description:</span>
+                        <div class="flex items-center">
+                            <span id="rewardPaidDescription" class="font-medium mr-2 text-right">-</span>
+                            <button onclick="copyRewardDescription()" class="text-blue-500 font-medium text-sm">Copy</button>
+                        </div>
+                    </div>
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">Transaction ID:</span>
+                        <span class="font-medium text-xs" id="rewardTransactionId">TXN123456789</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">Date:</span>
+                        <span class="font-medium" id="rewardPaymentDate">DD/MM/YYYY</span>
+                    </div>
+                </div>
+                
+                <button onclick="resetAndGoHome()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
+                    Back to Home
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Transaction Details Popup Screen -->
+    <div id="transactionPopup" class="screen">
+        <div class="phone-container bg-white">
+            <div class="flex flex-col items-center justify-center min-h-screen p-6">
+                <!-- Close Button -->
+                <button onclick="showScreen('history')" class="absolute top-4 right-4 text-gray-500">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+                
+                <div class="mb-8 text-center">
+                    <div id="popupIcon" class="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <i class="fas fa-check text-green-500 text-3xl"></i>
+                    </div>
+                    <h2 class="text-2xl font-bold text-gray-800">Transaction Details</h2>
+                    <p class="text-gray-600 mt-1" id="popupType">Payment</p>
+                </div>
+                
+                <div class="w-full bg-gray-50 rounded-xl p-6 mb-6">
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">From:</span>
+                        <span class="font-medium text-right" id="popupFrom">Sender</span>
+                    </div>
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">To:</span>
+                        <span class="font-medium text-right" id="popupTo">Recipient</span>
+                    </div>
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">Amount:</span>
+                        <span class="font-medium big-amount text-blue-500" id="popupAmount">₹0.00</span>
+                    </div>
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">Note:</span>
+                        <span class="font-medium text-right" id="popupNote">Payment</span>
+                    </div>
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">Date:</span>
+                        <span class="font-medium text-right" id="popupDate">Today</span>
+                    </div>
+                    <div class="flex justify-between mb-3">
+                        <span class="text-gray-600">Status:</span>
+                        <span class="font-medium text-green-500 text-right" id="popupStatus">Successful</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">Transaction ID:</span>
+                        <span class="font-medium text-xs text-right" id="popupTransactionId">TXN123456789</span>
+                    </div>
+                </div>
+                
+                <div class="w-full space-y-3">
+                    <button onclick="sharePopupTransaction()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
+                        <i class="fas fa-share-alt mr-2"></i>Share Details
+                    </button>
+                    <button onclick="downloadPopupPDF()" class="w-full bg-gray-200 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-300 transition">
+                        <i class="fas fa-download mr-2"></i>Download Receipt
+                    </button>
+                    <button onclick="showPopupAsPaymentSuccess()" class="w-full bg-green-500 text-white py-3 rounded-lg font-medium hover:bg-green-600 transition">
+                        <i class="fas fa-redo mr-2"></i>Show as Payment Success
+                    </button>
+                    <button onclick="showScreen('history')" class="w-full border border-gray-300 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-50 transition">
+                        Back to History
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -1659,68 +2205,6 @@
         </div>
     </div>
 
-    <!-- Transaction Details Screen -->
-    <div id="transactionDetails" class="screen">
-        <div class="phone-container bg-white">
-            <!-- Header -->
-            <div class="bg-blue-500 text-white p-4 flex items-center">
-                <button onclick="showScreen('history')" class="mr-3">
-                    <i class="fas fa-arrow-left"></i>
-                </button>
-                <h2 class="text-xl font-semibold">Transaction Details</h2>
-            </div>
-            
-            <!-- Success Message -->
-            <div id="transactionSuccessMessage" class="success-message mx-4 mt-4">
-                <i class="fas fa-check-circle"></i>
-                <span id="successMessageText">Transaction successful!</span>
-            </div>
-            
-            <!-- Details -->
-            <div class="p-6">
-                <div class="bg-gray-50 rounded-xl p-6 mb-6">
-                    <div class="flex justify-between mb-3">
-                        <span class="text-gray-600">From:</span>
-                        <span class="font-medium" id="detailFrom">Sender</span>
-                    </div>
-                    <div class="flex justify-between mb-3">
-                        <span class="text-gray-600">To:</span>
-                        <span class="font-medium" id="detailTo">Recipient</span>
-                    </div>
-                    <div class="flex justify-between mb-3">
-                        <span class="text-gray-600">Amount:</span>
-                        <span class="font-medium text-xl" id="detailAmount">₹0.00</span>
-                    </div>
-                    <div class="flex justify-between mb-3">
-                        <span class="text-gray-600">Type:</span>
-                        <span class="font-medium" id="detailType">Sent</span>
-                    </div>
-                    <div class="flex justify-between mb-3">
-                        <span class="text-gray-600">Note:</span>
-                        <span class="font-medium" id="detailNote">Payment</span>
-                    </div>
-                    <div class="flex justify-between mb-3">
-                        <span class="text-gray-600">Date:</span>
-                        <span class="font-medium" id="detailDate">Today</span>
-                    </div>
-                    <div class="flex justify-between" id="detailTransactionIdRow" style="display: none;">
-                        <span class="text-gray-600">Transaction ID:</span>
-                        <span class="font-medium text-xs" id="detailTransactionId">TXN123456789</span>
-                    </div>
-                </div>
-                
-                <div class="w-full space-y-3">
-                    <button onclick="shareTransaction()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
-                        <i class="fas fa-share-alt mr-2"></i>Share
-                    </button>
-                    <button onclick="downloadPDFReceipt()" class="w-full bg-gray-200 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-300 transition">
-                        <i class="fas fa-download mr-2"></i>Download Receipt
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <!-- History Screen -->
     <div id="history" class="screen">
         <div class="phone-container bg-gray-50 pb-20">
@@ -1800,6 +2284,16 @@
             <div class="px-6 mt-6">
                 <h3 class="font-semibold text-gray-800 mb-3">Account Settings</h3>
                 <div class="bg-white rounded-xl shadow-sm">
+                    <button onclick="showScreen('requestReward')" class="w-full p-4 flex items-center justify-between border-b border-gray-100">
+                        <div class="flex items-center">
+                            <div class="w-10 h-10 bg-pink-100 rounded-full flex items-center justify-center mr-3">
+                                <i class="fas fa-gift text-pink-500"></i>
+                            </div>
+                            <span class="font-medium">Request Reward</span>
+                        </div>
+                        <i class="fas fa-chevron-right text-gray-400"></i>
+                    </button>
+                    
                     <button onclick="generateQRCode()" class="w-full p-4 flex items-center justify-between border-b border-gray-100">
                         <div class="flex items-center">
                             <div class="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center mr-3">
@@ -2310,45 +2804,5 @@
             </div>
         </div>
     </div>
-
-    <script>
-        // Enable/disable proceed button based on disclaimer checkbox
-        document.getElementById('disclaimerCheck').addEventListener('change', function() {
-            const proceedBtn = document.getElementById('proceedBtn');
-            proceedBtn.disabled = !this.checked;
-        });
-        
-        // Load transactions for history screen
-        function loadHistoryTransactions() {
-            const transactionsRef = database.ref('transactions/' + currentUser.uid);
-            transactionsRef.orderByChild('timestamp').limitToLast(20).on('value', snapshot => {
-                const transactionsList = document.getElementById('historyTransactionsList');
-                transactionsList.innerHTML = '';
-                
-                if (snapshot.exists()) {
-                    const transactions = snapshot.val();
-                    Object.keys(transactions).reverse().forEach(key => {
-                        const transaction = transactions[key];
-                        const transactionEl = createTransactionElement(transaction, key);
-                        transactionsList.appendChild(transactionEl);
-                    });
-                } else {
-                    transactionsList.innerHTML = '<p class="text-gray-500 text-center py-4">No transactions yet</p>';
-                }
-            });
-        }
-        
-        // Override showScreen to load history transactions when needed
-        const originalShowScreen = showScreen;
-        showScreen = function(screenId) {
-            originalShowScreen(screenId);
-            
-            if (screenId === 'history') {
-                loadHistoryTransactions();
-            } else if (screenId === 'changeName') {
-                loadCurrentProfileName();
-            }
-        };
-    </script>
 </body>
 </html>
