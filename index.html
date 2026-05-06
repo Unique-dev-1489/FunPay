@@ -12,6 +12,8 @@
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
     <!-- Google Sign-In -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <!-- jsQR library for image QR scanning -->
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <style>
         .screen {
             display: none;
@@ -132,10 +134,12 @@
             width: 100%;
             max-width: 480px;
             margin: 0 auto;
+            position: relative;
         }
         #qr-reader video {
             width: 100%;
             height: auto;
+            border-radius: 8px;
         }
         .qr-container {
             display: flex;
@@ -335,6 +339,159 @@
             background-color: #f9fafb;
             border-color: #d1d5db;
         }
+        /* Image QR scanner styles */
+        .image-preview-container {
+            position: relative;
+            max-width: 300px;
+            margin: 0 auto;
+        }
+        .image-preview-container img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .qr-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: 2px dashed #3b82f6;
+            border-radius: 8px;
+            pointer-events: none;
+        }
+        /* Toggle switch styles */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 60px;
+            height: 30px;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 34px;
+        }
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 22px;
+            width: 22px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .toggle-slider {
+            background-color: #8b5cf6;
+        }
+        input:checked + .toggle-slider:before {
+            transform: translateX(30px);
+        }
+        /* QR Scanner Controls */
+        .qr-scanner-controls {
+            position: absolute;
+            bottom: 20px;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            z-index: 10;
+        }
+        .scanner-control-btn {
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .scanner-control-btn:hover {
+            background-color: rgba(0, 0, 0, 0.9);
+            transform: scale(1.1);
+        }
+        /* PDF Receipt Styles */
+        .receipt-preview {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            border: 1px solid #e5e7eb;
+        }
+        .receipt-header {
+            text-align: center;
+            border-bottom: 2px solid #3b82f6;
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+        }
+        .receipt-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .receipt-item {
+            padding: 8px 0;
+            border-bottom: 1px dashed #e5e7eb;
+        }
+        .receipt-footer {
+            text-align: center;
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid #e5e7eb;
+            font-size: 12px;
+            color: #6b7280;
+        }
+        .share-options {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .share-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 10px;
+            border-radius: 8px;
+            background-color: #f9fafb;
+            border: 1px solid #e5e7eb;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .share-btn:hover {
+            background-color: #f3f4f6;
+            transform: translateY(-2px);
+        }
+        .share-btn i {
+            font-size: 20px;
+            margin-bottom: 5px;
+        }
+        .share-btn.whatsapp { color: #25D366; }
+        .share-btn.email { color: #EA4335; }
+        .share-btn.sms { color: #34B7F1; }
+        .share-btn.copy { color: #6b7280; }
     </style>
 </head>
 <body class="bg-gray-50">
@@ -400,6 +557,10 @@
         let pinVerificationCallback = null;
         let pinVerificationData = null;
 
+        // Image QR Scanner state
+        let selectedQRImage = null;
+        let imageScanResult = null;
+
         // Initialize app
         document.addEventListener('DOMContentLoaded', function() {
             // Check if user is logged in
@@ -442,6 +603,293 @@
             // Initialize rule selection
             initializeRuleSelection();
         });
+
+        // --- IMAGE QR SCANNER FUNCTIONS ---
+        function showImageQRScanner() {
+            showScreen('imageQRScanner');
+            resetImageScanner();
+        }
+
+        function handleImageSelection(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            // Check if it's an image
+            if (!file.type.match('image.*')) {
+                alert('Please select an image file (JPG, PNG, GIF, etc.)');
+                return;
+            }
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                selectedQRImage = e.target.result;
+                
+                // Show image preview
+                const preview = document.getElementById('selectedImage');
+                preview.src = selectedQRImage;
+                document.getElementById('imagePreview').classList.remove('hidden');
+                
+                // Enable scan button
+                document.getElementById('scanImageBtn').disabled = false;
+                
+                // Hide previous results
+                document.getElementById('scanResult').classList.add('hidden');
+                document.getElementById('scanError').classList.add('hidden');
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function scanImageForQR() {
+            if (!selectedQRImage) return;
+            
+            // Show loading state
+            const scanBtn = document.getElementById('scanImageBtn');
+            const originalText = scanBtn.innerHTML;
+            scanBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Scanning...';
+            scanBtn.disabled = true;
+            
+            // Create an image element
+            const img = new Image();
+            img.onload = function() {
+                // Create a canvas to draw the image
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                
+                // Set canvas dimensions to match image
+                canvas.width = img.width;
+                canvas.height = img.height;
+                
+                // Draw image to canvas
+                ctx.drawImage(img, 0, 0, img.width, img.height);
+                
+                try {
+                    // Get image data
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    
+                    // Use jsQR to decode QR code
+                    const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                        inversionAttempts: "dontInvert",
+                    });
+                    
+                    if (code) {
+                        processQRScanResult(code.data);
+                    } else {
+                        showScanError();
+                    }
+                } catch (error) {
+                    console.error('Error scanning image:', error);
+                    showScanError();
+                } finally {
+                    // Reset button state
+                    scanBtn.innerHTML = originalText;
+                    scanBtn.disabled = false;
+                }
+            };
+            img.onerror = function() {
+                alert('Error loading image. Please try another image.');
+                scanBtn.innerHTML = originalText;
+                scanBtn.disabled = false;
+            };
+            img.src = selectedQRImage;
+        }
+
+        function processQRScanResult(data) {
+            imageScanResult = data;
+            
+            // Display result
+            const resultText = document.getElementById('qrResultText');
+            const resultActions = document.getElementById('qrResultActions');
+            
+            try {
+                // Try to parse as JSON (for custom QR codes)
+                const parsedData = JSON.parse(data);
+                
+                if (parsedData.type === 'customQR') {
+                    // Custom QR payment
+                    resultText.innerHTML = `<strong>Custom QR Payment</strong><br>
+                                           Amount: <span class="font-semibold text-purple-600">₹${parsedData.amount}</span><br>
+                                           To: <span class="font-semibold">${parsedData.userName}</span><br>
+                                           Account: <span class="font-mono">${parsedData.userAccount}</span>`;
+                    
+                    resultActions.innerHTML = `
+                        <div class="grid grid-cols-2 gap-2">
+                            <button onclick="processImageQRPayment('${encodeURIComponent(data)}')" 
+                                    class="bg-purple-500 text-white py-2 rounded-lg font-medium hover:bg-purple-600 transition">
+                                <i class="fas fa-qrcode mr-2"></i>Pay Now
+                            </button>
+                            <button onclick="copyQRData('${encodeURIComponent(data)}')" 
+                                    class="bg-blue-500 text-white py-2 rounded-lg font-medium hover:bg-blue-600 transition">
+                                <i class="fas fa-copy mr-2"></i>Copy Data
+                            </button>
+                        </div>
+                    `;
+                } else if (parsedData.uid && parsedData.accountNumber) {
+                    // Regular user QR
+                    resultText.innerHTML = `<strong>User QR Code</strong><br>
+                                           Account: <span class="font-mono font-semibold">${parsedData.accountNumber}</span><br>
+                                           Name: <span class="font-semibold">${parsedData.displayName}</span><br>
+                                           Bank: <span class="text-sm">${parsedData.bankName}</span>`;
+                    
+                    resultActions.innerHTML = `
+                        <div class="grid grid-cols-2 gap-2">
+                            <button onclick="processImageQRUser('${encodeURIComponent(data)}')" 
+                                    class="bg-blue-500 text-white py-2 rounded-lg font-medium hover:bg-blue-600 transition">
+                                <i class="fas fa-user mr-2"></i>View User
+                            </button>
+                            <button onclick="copyQRData('${encodeURIComponent(data)}')" 
+                                    class="bg-gray-200 text-gray-700 py-2 rounded-lg font-medium hover:bg-gray-300 transition">
+                                <i class="fas fa-copy mr-2"></i>Copy
+                            </button>
+                        </div>
+                    `;
+                } else {
+                    // Unknown JSON format
+                    resultText.textContent = `QR Data: ${data.substring(0, 50)}${data.length > 50 ? '...' : ''}`;
+                    
+                    resultActions.innerHTML = `
+                        <button onclick="copyQRData('${encodeURIComponent(data)}')" 
+                                class="w-full bg-gray-200 text-gray-700 py-2 rounded-lg font-medium hover:bg-gray-300 transition">
+                            <i class="fas fa-copy mr-2"></i>Copy Data
+                        </button>
+                    `;
+                }
+            } catch (e) {
+                // Not JSON, treat as plain text
+                if (data.includes('rewardId=')) {
+                    // Extract rewardId from URL
+                    const urlParams = new URLSearchParams(data.includes('?') ? data.split('?')[1] : data);
+                    const rewardId = urlParams.get('rewardId');
+                    
+                    resultText.innerHTML = `<strong>Reward Link Detected</strong><br>
+                                           <span class="text-sm text-gray-600">Click below to claim this reward</span>`;
+                    
+                    resultActions.innerHTML = `
+                        <button onclick="openRewardLink('${rewardId || encodeURIComponent(data)}')" 
+                                class="w-full bg-pink-500 text-white py-2 rounded-lg font-medium hover:bg-pink-600 transition">
+                            <i class="fas fa-gift mr-2"></i>Claim Reward
+                        </button>
+                    `;
+                } else if (data.includes('customQRId=')) {
+                    // Extract customQRId from URL
+                    const urlParams = new URLSearchParams(data.includes('?') ? data.split('?')[1] : data);
+                    const customQRId = urlParams.get('customQRId');
+                    
+                    resultText.innerHTML = `<strong>Custom QR Payment Link</strong><br>
+                                           <span class="text-sm text-gray-600">Click below to process payment</span>`;
+                    
+                    resultActions.innerHTML = `
+                        <button onclick="openCustomQRLink('${customQRId || encodeURIComponent(data)}')" 
+                                class="w-full bg-purple-500 text-white py-2 rounded-lg font-medium hover:bg-purple-600 transition">
+                            <i class="fas fa-qrcode mr-2"></i>Process Payment
+                        </button>
+                    `;
+                } else if (data.startsWith('http') || data.startsWith('https')) {
+                    // URL
+                    resultText.innerHTML = `<strong>URL Found</strong><br>
+                                           <span class="text-sm text-blue-600 break-all">${data}</span>`;
+                    
+                    resultActions.innerHTML = `
+                        <div class="grid grid-cols-2 gap-2">
+                            <button onclick="window.open('${data}', '_blank')" 
+                                    class="bg-blue-500 text-white py-2 rounded-lg font-medium hover:bg-blue-600 transition">
+                                <i class="fas fa-external-link-alt mr-2"></i>Open URL
+                            </button>
+                            <button onclick="copyQRData('${encodeURIComponent(data)}')" 
+                                    class="bg-gray-200 text-gray-700 py-2 rounded-lg font-medium hover:bg-gray-300 transition">
+                                <i class="fas fa-copy mr-2"></i>Copy
+                            </button>
+                        </div>
+                    `;
+                } else {
+                    // Plain text QR
+                    resultText.innerHTML = `<strong>Text Content</strong><br>
+                                           <span class="text-sm">${data.length > 100 ? data.substring(0, 100) + '...' : data}</span>`;
+                    
+                    resultActions.innerHTML = `
+                        <div class="grid grid-cols-2 gap-2">
+                            <button onclick="copyQRData('${encodeURIComponent(data)}')" 
+                                    class="bg-blue-500 text-white py-2 rounded-lg font-medium hover:bg-blue-600 transition">
+                                <i class="fas fa-copy mr-2"></i>Copy Text
+                            </button>
+                            <button onclick="shareQRData('${encodeURIComponent(data)}')" 
+                                    class="bg-green-500 text-white py-2 rounded-lg font-medium hover:bg-green-600 transition">
+                                <i class="fas fa-share mr-2"></i>Share
+                            </button>
+                        </div>
+                    `;
+                }
+            }
+            
+            // Show result section
+            document.getElementById('scanResult').classList.remove('hidden');
+            document.getElementById('scanError').classList.add('hidden');
+        }
+
+        function processImageQRPayment(data) {
+            try {
+                const parsedData = JSON.parse(decodeURIComponent(data));
+                if (parsedData.type === 'customQR') {
+                    // Redirect to custom QR payment
+                    window.location.href = `${window.location.origin}${window.location.pathname}?customQRId=${parsedData.qrId}`;
+                }
+            } catch (e) {
+                alert('Invalid QR data');
+            }
+        }
+
+        function processImageQRUser(data) {
+            try {
+                const parsedData = JSON.parse(decodeURIComponent(data));
+                scannedUserData = parsedData;
+                showQRPaymentScreen(parsedData);
+            } catch (e) {
+                alert('Invalid user QR data');
+            }
+        }
+
+        function openRewardLink(rewardId) {
+            window.location.href = `${window.location.origin}${window.location.pathname}?rewardId=${rewardId}`;
+        }
+
+        function openCustomQRLink(customQRId) {
+            window.location.href = `${window.location.origin}${window.location.pathname}?customQRId=${customQRId}`;
+        }
+
+        function copyQRData(data) {
+            const decodedData = decodeURIComponent(data);
+            copyTextToClipboard(decodedData);
+        }
+
+        function shareQRData(data) {
+            const decodedData = decodeURIComponent(data);
+            if (navigator.share) {
+                navigator.share({
+                    title: 'QR Code Data',
+                    text: decodedData
+                }).catch(err => console.log('Error sharing:', err));
+            } else {
+                copyTextToClipboard(decodedData);
+            }
+        }
+
+        function showScanError() {
+            document.getElementById('scanResult').classList.add('hidden');
+            document.getElementById('scanError').classList.remove('hidden');
+        }
+
+        function resetImageScanner() {
+            selectedQRImage = null;
+            imageScanResult = null;
+            
+            // Reset UI
+            document.getElementById('imagePreview').classList.add('hidden');
+            document.getElementById('scanResult').classList.add('hidden');
+            document.getElementById('scanError').classList.add('hidden');
+            document.getElementById('scanImageBtn').disabled = true;
+            
+            // Reset file input
+            document.getElementById('qrImageInput').value = '';
+        }
 
         // --- GOOGLE SIGN-IN FUNCTIONS ---
         function signInWithGoogle() {
@@ -789,7 +1237,7 @@
             document.getElementById('customQRPaidNote').textContent = scannedCustomQRData.note;
             document.getElementById('customQRSuccessTransactionId').textContent = transactionId;
             
-            // FIX: Set the current date properly
+            // Set the current date properly
             const currentDate = new Date();
             document.getElementById('customQRPaymentDate').textContent = formatDate(currentDate.getTime());
             
@@ -968,13 +1416,20 @@
             document.getElementById('rewardUserName').textContent = currentRewardData.userName;
             document.getElementById('rewardUserAccount').textContent = currentRewardData.userAccount;
             document.getElementById('rewardPaymentAmount').textContent = '₹' + currentRewardData.amount.toFixed(2);
-            const descEl = document.getElementById('rewardDescriptionText');
-            descEl.innerHTML = `
-                <div class="flex items-center justify-center text-gray-500 text-sm bg-gray-100 rounded-lg p-3">
-                    <i class="fas fa-lock mr-2 text-gray-400"></i>
-                    <span>Locked until payment</span>
-                </div>
-            `;
+            
+            // Check if description should be hidden
+            if (currentRewardData.hideDescription) {
+                const descEl = document.getElementById('rewardDescriptionText');
+                descEl.innerHTML = `
+                    <div class="flex items-center justify-center text-gray-500 text-sm bg-gray-100 rounded-lg p-3">
+                        <i class="fas fa-lock mr-2 text-gray-400"></i>
+                        <span>Locked until payment</span>
+                    </div>
+                `;
+            } else {
+                const descEl = document.getElementById('rewardDescriptionText');
+                descEl.innerHTML = currentRewardData.description || 'Reward Payment';
+            }
             
             // Show rule information
             const ruleInfo = currentRewardData.ruleOption === 1 ? 
@@ -987,6 +1442,7 @@
         function generateRewardLink() {
             const amount = parseFloat(document.getElementById('rewardAmount').value);
             const description = document.getElementById('rewardDescription').value;
+            const hideDescription = document.getElementById('rewardHideDescription').checked;
             
             if (!amount || amount <= 0) {
                 alert('Please enter a valid amount.');
@@ -1011,6 +1467,7 @@
                     userAccount: userData.accountNumber,
                     amount: amount,
                     description: description || 'Reward Payment',
+                    hideDescription: hideDescription,
                     ruleOption: selectedRuleOption,
                     status: 'active',
                     createdAt: Date.now(),
@@ -1024,6 +1481,7 @@
                     // Reset form
                     document.getElementById('rewardAmount').value = '';
                     document.getElementById('rewardDescription').value = '';
+                    document.getElementById('rewardHideDescription').checked = false;
                     
                     // Show success message
                     alert('Reward link generated successfully!');
@@ -1191,6 +1649,7 @@
                     <div>
                         <p class="font-medium text-lg">₹${reward.amount.toFixed(2)}</p>
                         <p class="text-sm text-gray-600">${reward.description || 'Reward Payment'}</p>
+                        ${reward.hideDescription ? '<span class="text-xs text-gray-500">(Description hidden until payment)</span>' : ''}
                     </div>
                     <div class="flex flex-col items-end">
                         <span class="status-badge ${statusClass}">${status}</span>
@@ -1726,49 +2185,372 @@
             }
         }
 
-        function downloadPDFReceipt() {
-            if (!lastTransaction) return;
+        // Enhanced PDF Download Function
+        function downloadPDFReceipt(transaction = null) {
+            const transactionToUse = transaction || lastTransaction;
+            if (!transactionToUse) return;
             
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF();
             
-            doc.setFontSize(20);
-            doc.setTextColor(66, 133, 244);
+            // Set document properties
+            doc.setProperties({
+                title: `Fun Pay Receipt - ${transactionToUse.transactionId}`,
+                subject: 'Payment Receipt',
+                author: 'Fun Pay Educational Platform',
+                keywords: 'receipt, payment, fun pay, educational',
+                creator: 'Fun Pay'
+            });
+            
+            // Add background pattern
+            doc.setFillColor(245, 245, 245);
+            doc.rect(0, 0, 210, 297, 'F');
+            
+            // Add decorative header
+            doc.setFillColor(59, 130, 246);
+            doc.rect(0, 0, 210, 40, 'F');
+            
+            // Add logo and title
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(24);
+            doc.setFont('helvetica', 'bold');
             doc.text('Fun Pay', 105, 20, { align: 'center' });
             
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            doc.text('Educational Payment Platform', 105, 28, { align: 'center' });
+            
+            // Add receipt title
+            doc.setTextColor(30, 41, 59);
+            doc.setFontSize(18);
+            doc.setFont('helvetica', 'bold');
+            doc.text('PAYMENT RECEIPT', 105, 50, { align: 'center' });
+            
+            // Add decorative line
+            doc.setDrawColor(59, 130, 246);
+            doc.setLineWidth(0.5);
+            doc.line(20, 55, 190, 55);
+            
+            // Transaction details section
+            doc.setTextColor(30, 41, 59);
             doc.setFontSize(12);
-            doc.setTextColor(100);
-            doc.text('Educational Payment Platform', 105, 27, { align: 'center' });
+            doc.setFont('helvetica', 'bold');
+            doc.text('Transaction Details', 20, 65);
+            
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(71, 85, 105);
+            
+            const details = [
+                [`Transaction ID:`, transactionToUse.transactionId],
+                [`Date:`, formatDate(transactionToUse.timestamp)],
+                [`Status:`, 'Successful'],
+                [`Reference:`, transactionToUse.note || 'Payment']
+            ];
+            
+            let yPos = 75;
+            details.forEach(([label, value]) => {
+                doc.setFont('helvetica', 'bold');
+                doc.text(label, 20, yPos);
+                doc.setFont('helvetica', 'normal');
+                doc.text(value, 70, yPos);
+                yPos += 7;
+            });
+            
+            // Payment details section
+            yPos += 5;
+            doc.setFontSize(12);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(30, 41, 59);
+            doc.text('Payment Information', 20, yPos);
+            
+            yPos += 10;
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(71, 85, 105);
+            
+            const paymentDetails = [
+                [`From:`, transactionToUse.from],
+                [`Account:`, transactionToUse.senderAccountNumber || 'N/A'],
+                [`To:`, transactionToUse.to],
+                [`Account:`, transactionToUse.recipientAccountNumber || 'N/A']
+            ];
+            
+            paymentDetails.forEach(([label, value]) => {
+                doc.setFont('helvetica', 'bold');
+                doc.text(label, 20, yPos);
+                doc.setFont('helvetica', 'normal');
+                doc.text(value, 50, yPos);
+                yPos += 7;
+            });
+            
+            // Amount box
+            yPos += 10;
+            doc.setFillColor(236, 253, 245);
+            doc.roundedRect(20, yPos, 170, 25, 3, 3, 'F');
             
             doc.setFontSize(16);
-            doc.setTextColor(0);
-            doc.text('Payment Receipt', 105, 40, { align: 'center' });
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(22, 163, 74);
+            doc.text('Amount Paid:', 30, yPos + 10);
+            doc.text(`₹${transactionToUse.amount.toFixed(2)}`, 160, yPos + 10, { align: 'right' });
             
-            doc.setFontSize(12);
-            doc.text('Transaction Details', 20, 55);
-            
+            // Payment method
+            yPos += 35;
             doc.setFontSize(10);
-            doc.text(`Transaction ID: ${lastTransaction.transactionId}`, 20, 65);
-            doc.text(`Date: ${formatDate(lastTransaction.timestamp)}`, 20, 72);
-            doc.text(`Status: Successful`, 20, 79);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(71, 85, 105);
+            doc.text(`Payment Method: ${transactionToUse.paymentMethod || 'Account Transfer'}`, 20, yPos);
             
-            doc.setFontSize(12);
-            doc.text('Payment Details', 20, 95);
-            
-            doc.setFontSize(10);
-            doc.text(`From: ${lastTransaction.from}`, 20, 105);
-            doc.text(`To: ${lastTransaction.to}`, 20, 112);
-            doc.text(`Amount: ₹${lastTransaction.amount.toFixed(2)}`, 20, 119);
-            doc.text(`Note: ${lastTransaction.note || 'Payment'}`, 20, 126);
-            
-            doc.setFontSize(8);
-            doc.setTextColor(150);
-            doc.text('This is an educational receipt. No real money was involved.', 105, 280, { align: 'center' });
-            doc.text('© 2023 Fun Pay - Educational Platform', 105, 285, { align: 'center' });
-            
-            doc.save(`FunPay_Receipt_${lastTransaction.transactionId}.pdf`);
+            // QR Code for verification (if available)
+            yPos += 20;
+            try {
+                const qrData = JSON.stringify({
+                    transactionId: transactionToUse.transactionId,
+                    date: transactionToUse.timestamp,
+                    amount: transactionToUse.amount,
+                    from: transactionToUse.from,
+                    to: transactionToUse.to
+                });
+                
+                // Create a QR code element
+                const qrDiv = document.createElement('div');
+                document.body.appendChild(qrDiv);
+                
+                new QRCode(qrDiv, {
+                    text: qrData,
+                    width: 50,
+                    height: 50,
+                    colorDark: "#000000",
+                    colorLight: "#ffffff",
+                    correctLevel: QRCode.CorrectLevel.H
+                });
+                
+                // Convert QR to image and add to PDF
+                setTimeout(() => {
+                    const qrCanvas = qrDiv.querySelector('canvas');
+                    const qrImage = qrCanvas.toDataURL('image/png');
+                    
+                    doc.addImage(qrImage, 'PNG', 80, yPos, 50, 50);
+                    doc.setFontSize(8);
+                    doc.setTextColor(100, 116, 139);
+                    doc.text('Scan to verify transaction', 105, yPos + 60, { align: 'center' });
+                    
+                    // Footer
+                    doc.setFontSize(8);
+                    doc.setTextColor(148, 163, 184);
+                    doc.text('This is an educational receipt. No real money was involved.', 105, 280, { align: 'center' });
+                    doc.text('© 2023 Fun Pay - Educational Platform | funpay.edu', 105, 285, { align: 'center' });
+                    doc.text('Transaction verified and secured by Fun Pay', 105, 290, { align: 'center' });
+                    
+                    // Save the PDF
+                    doc.save(`FunPay_Receipt_${transactionToUse.transactionId}.pdf`);
+                    
+                    // Clean up
+                    document.body.removeChild(qrDiv);
+                }, 100);
+            } catch (error) {
+                console.error('Error generating QR for PDF:', error);
+                
+                // Footer without QR
+                doc.setFontSize(8);
+                doc.setTextColor(148, 163, 184);
+                doc.text('This is an educational receipt. No real money was involved.', 105, 280, { align: 'center' });
+                doc.text('© 2023 Fun Pay - Educational Platform | funpay.edu', 105, 285, { align: 'center' });
+                doc.text('Transaction verified and secured by Fun Pay', 105, 290, { align: 'center' });
+                
+                // Save the PDF
+                doc.save(`FunPay_Receipt_${transactionToUse.transactionId}.pdf`);
+            }
         }
 
+        // New function to share PDF via different methods
+        function shareTransactionPDF(transaction = null) {
+            const transactionToUse = transaction || lastTransaction;
+            if (!transactionToUse) return;
+            
+            // Create a preview of the receipt
+            showScreen('pdfPreview');
+            
+            // Update preview content
+            document.getElementById('pdfPreviewTransactionId').textContent = transactionToUse.transactionId;
+            document.getElementById('pdfPreviewDate').textContent = formatDate(transactionToUse.timestamp);
+            document.getElementById('pdfPreviewFrom').textContent = transactionToUse.from;
+            document.getElementById('pdfPreviewTo').textContent = transactionToUse.to;
+            document.getElementById('pdfPreviewAmount').textContent = '₹' + transactionToUse.amount.toFixed(2);
+            document.getElementById('pdfPreviewNote').textContent = transactionToUse.note || 'Payment';
+            document.getElementById('pdfPreviewMethod').textContent = transactionToUse.paymentMethod || 'Account Transfer';
+            
+            // Store transaction for download
+            window.currentPDFTransaction = transactionToUse;
+        }
+// Fix the sharing functions to use the correct transaction data
+function shareViaWhatsApp() {
+    const transaction = window.currentPDFTransaction || lastTransaction;
+    if (!transaction) {
+        alert('No transaction data available.');
+        return;
+    }
+    
+    try {
+        const message = `Payment Receipt\n\nTransaction ID: ${transaction.transactionId}\nAmount: ₹${transaction.amount.toFixed(2)}\nFrom: ${transaction.from}\nTo: ${transaction.to}\nDate: ${formatDate(transaction.timestamp)}\nNote: ${transaction.note || 'Payment'}\n\nShared via Fun Pay Educational App`;
+        
+        // Create a WhatsApp share URL
+        const whatsappUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(message)}`;
+        
+        // Open in new window
+        const newWindow = window.open(whatsappUrl, '_blank');
+        if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+            // If popup is blocked, show alternative
+            alert('WhatsApp sharing was blocked. You can manually copy the text and share it on WhatsApp.\n\n' + message);
+        }
+    } catch (error) {
+        console.error('Error sharing via WhatsApp:', error);
+        alert('Could not share via WhatsApp. Please try again.');
+    }
+}
+
+function shareViaEmail() {
+    const transaction = window.currentPDFTransaction || lastTransaction;
+    if (!transaction) {
+        alert('No transaction data available.');
+        return;
+    }
+    
+    try {
+        const subject = `Fun Pay Receipt - ${transaction.transactionId}`;
+        const body = `Dear Recipient,\n\nPlease find the payment receipt details below:\n\nTransaction ID: ${transaction.transactionId}\nAmount: ₹${transaction.amount.toFixed(2)}\nFrom: ${transaction.from}\nTo: ${transaction.to}\nDate: ${formatDate(transaction.timestamp)}\nNote: ${transaction.note || 'Payment'}\nPayment Method: ${transaction.paymentMethod || 'Account Transfer'}\n\nThis is an educational transaction from Fun Pay Educational Platform.\n\nBest regards,\nFun Pay Team`;
+        
+        // Create mailto link
+        const mailtoUrl = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+        
+        // Try to open email client
+        window.location.href = mailtoUrl;
+        
+        // Fallback: If mailto doesn't work after a delay, show copy option
+        setTimeout(() => {
+            if (confirm('Email client not opened. Would you like to copy the email content to clipboard instead?')) {
+                copyTextToClipboard(body);
+            }
+        }, 1000);
+    } catch (error) {
+        console.error('Error sharing via email:', error);
+        alert('Could not share via email. Please try again.');
+    }
+}
+
+function shareViaSMS() {
+    const transaction = window.currentPDFTransaction || lastTransaction;
+    if (!transaction) {
+        alert('No transaction data available.');
+        return;
+    }
+    
+    try {
+        const message = `Fun Pay Receipt: ₹${transaction.amount.toFixed(2)} paid to ${transaction.to}. Transaction ID: ${transaction.transactionId}. Date: ${formatDate(transaction.timestamp)}. Educational purpose only.`;
+        
+        // Create SMS share URL
+        // Using the standard SMS URI scheme
+        const smsUrl = `sms:?body=${encodeURIComponent(message)}`;
+        
+        // Try to open SMS app
+        window.location.href = smsUrl;
+        
+        // Fallback: If SMS doesn't work after a delay, show copy option
+        setTimeout(() => {
+            if (confirm('SMS app not opened. Would you like to copy the message to clipboard instead?')) {
+                copyTextToClipboard(message);
+            }
+        }, 1000);
+    } catch (error) {
+        console.error('Error sharing via SMS:', error);
+        alert('Could not share via SMS. Please try again.');
+    }
+}
+
+// Enhanced copyTextToClipboard function with better error handling
+function copyTextToClipboard(text) {
+    if (!navigator.clipboard) {
+        // Fallback for older browsers
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        textArea.style.position = "fixed";
+        textArea.style.opacity = "0";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        
+        try {
+            const successful = document.execCommand('copy');
+            document.body.removeChild(textArea);
+            if (successful) {
+                alert('Copied to clipboard!');
+            } else {
+                throw new Error('Copy command failed');
+            }
+        } catch (err) {
+            document.body.removeChild(textArea);
+            alert('Oops, unable to copy. Please try again.');
+            console.error('Copy error:', err);
+        }
+        return;
+    }
+    
+    // Modern clipboard API
+    navigator.clipboard.writeText(text).then(() => {
+        alert('Copied to clipboard!');
+    }, (err) => {
+        console.error('Could not copy text: ', err);
+        alert('Oops, unable to copy. Please try again.');
+    });
+}
+
+// Update the shareTransactionPDF function to ensure currentPDFTransaction is set
+function shareTransactionPDF(transaction = null) {
+    const transactionToUse = transaction || lastTransaction;
+    if (!transactionToUse) {
+        alert('No transaction data available.');
+        return;
+    }
+    
+    // Create a preview of the receipt
+    showScreen('pdfPreview');
+    
+    // Update preview content
+    document.getElementById('pdfPreviewTransactionId').textContent = transactionToUse.transactionId;
+    document.getElementById('pdfPreviewDate').textContent = formatDate(transactionToUse.timestamp);
+    document.getElementById('pdfPreviewFrom').textContent = transactionToUse.from;
+    document.getElementById('pdfPreviewTo').textContent = transactionToUse.to;
+    document.getElementById('pdfPreviewAmount').textContent = '₹' + transactionToUse.amount.toFixed(2);
+    document.getElementById('pdfPreviewNote').textContent = transactionToUse.note || 'Payment';
+    document.getElementById('pdfPreviewMethod').textContent = transactionToUse.paymentMethod || 'Account Transfer';
+    
+    // Store transaction for download
+    window.currentPDFTransaction = transactionToUse;
+}
+
+// Update the downloadPreviewPDF function to use the stored transaction
+function downloadPreviewPDF() {
+    if (window.currentPDFTransaction) {
+        downloadPDFReceipt(window.currentPDFTransaction);
+    } else {
+        alert('No transaction data available for download.');
+    }
+}
+
+// Also update the buttons in the payment success screen to use the new sharing function
+// Replace the existing shareTransaction function call in paymentSuccess screen with shareTransactionPDF()
+
+// In the paymentSuccess screen HTML, change the "Share" button from:
+// onclick="shareTransaction()" 
+// to:
+// onclick="shareTransactionPDF()"
+
+// And in the transactionPopup screen, change the "Share Receipt" button from:
+// onclick="shareTransactionPDF(clickedTransaction)"
+// to:
+// onclick="shareTransactionPDF(clickedTransaction)"
         function requestMoney() {
             const recipient = document.getElementById('requestRecipient').value;
             const amount = parseFloat(document.getElementById('requestAmount').value);
@@ -2386,15 +3168,7 @@
 
         function downloadPopupPDF() {
             if (!clickedTransaction) return;
-            
-            // Temporarily set lastTransaction to clicked one
-            const originalTransaction = lastTransaction;
-            lastTransaction = clickedTransaction;
-            
-            downloadPDFReceipt();
-            
-            // Restore original lastTransaction
-            lastTransaction = originalTransaction;
+            shareTransactionPDF(clickedTransaction);
         }
 
         function copyToClipboard(elementId) {
@@ -2842,7 +3616,7 @@
                         <img id="homeProfileIcon" src="https://picsum.photos/seed/user/200/200.jpg" class="w-12 h-12 rounded-full border-2 border-white">
                         <div class="absolute bottom-0 right-0 w-4 h-4 bg-green-400 rounded-full border-2 border-white"></div>
                     </div>
-                    <!-- Scan QR Button -->
+                    <!-- Single QR Scanner Button -->
                     <button onclick="startQRScanner()" class="w-10 h-10 bg-white/20 backdrop-blur rounded-full flex items-center justify-center">
                         <i class="fas fa-qrcode text-white"></i>
                     </button>
@@ -2956,6 +3730,175 @@
         </div>
     </div>
 
+    <!-- Image QR Scanner Screen -->
+    <div id="imageQRScanner" class="screen">
+        <div class="phone-container bg-white">
+            <!-- Header -->
+            <div class="bg-indigo-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('home')" class="mr-3">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Scan QR from Image</h2>
+            </div>
+            
+            <!-- Image Scanner Content -->
+            <div class="p-6">
+                <div class="flex flex-col items-center justify-center py-8">
+                    <div class="w-32 h-32 bg-gray-100 rounded-lg flex items-center justify-center mb-4">
+                        <i class="fas fa-image text-gray-400 text-5xl"></i>
+                    </div>
+                    <p class="text-gray-600 mb-6 text-center">Select an image containing a QR code</p>
+                    
+                    <!-- Image Preview -->
+                    <div id="imagePreview" class="mb-6 w-full max-w-xs mx-auto hidden image-preview-container">
+                        <img id="selectedImage" class="w-full h-auto rounded-lg border border-gray-300">
+                        <div class="qr-overlay"></div>
+                    </div>
+                    
+                    <!-- Scan Result -->
+                    <div id="scanResult" class="mb-6 w-full hidden">
+                        <div class="bg-gray-50 rounded-xl p-4">
+                            <h3 class="font-semibold text-gray-800 mb-2">QR Code Found!</h3>
+                            <p id="qrResultText" class="text-sm text-gray-600 mb-3"></p>
+                            <div id="qrResultActions" class="mt-3"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Error Message -->
+                    <div id="scanError" class="mb-6 w-full hidden">
+                        <div class="bg-red-50 border border-red-200 rounded-xl p-4">
+                            <h3 class="font-semibold text-red-800 mb-2">
+                                <i class="fas fa-exclamation-circle mr-2"></i>No QR Code Found
+                            </h3>
+                            <p class="text-sm text-red-600">The selected image doesn't contain a valid QR code. Please try another image.</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Action Buttons -->
+                    <div class="w-full space-y-3">
+                        <button onclick="document.getElementById('qrImageInput').click()" 
+                                class="w-full bg-indigo-500 text-white py-3 rounded-lg font-medium hover:bg-indigo-600 transition">
+                            <i class="fas fa-folder-open mr-2"></i>Choose Image
+                        </button>
+                        
+                        <button onclick="scanImageForQR()" 
+                                id="scanImageBtn"
+                                class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition disabled:bg-gray-300 disabled:cursor-not-allowed"
+                                disabled>
+                            <i class="fas fa-search mr-2"></i>Scan Image
+                        </button>
+                        
+                        <button onclick="resetImageScanner()" 
+                                class="w-full border border-gray-300 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-50 transition">
+                            <i class="fas fa-redo mr-2"></i>Reset
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="mt-4 p-3 bg-blue-50 rounded-lg">
+                    <p class="text-xs text-blue-700">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        Supported formats: JPG, PNG, GIF, BMP. The QR code should be clear and well-lit.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden file input for image QR scanning -->
+    <input type="file" id="qrImageInput" accept="image/*" style="display: none;" onchange="handleImageSelection(event)">
+
+    <!-- PDF Preview Screen -->
+    <div id="pdfPreview" class="screen">
+        <div class="phone-container bg-white">
+            <!-- Header -->
+            <div class="bg-blue-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('history')" class="mr-3">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Receipt Preview</h2>
+            </div>
+            
+            <!-- Receipt Preview Content -->
+            <div class="p-6">
+                <div class="receipt-preview">
+                    <div class="receipt-header">
+                        <h3 class="text-xl font-bold text-blue-600">Fun Pay</h3>
+                        <p class="text-sm text-gray-600">Educational Payment Platform</p>
+                        <h4 class="text-lg font-semibold mt-2">PAYMENT RECEIPT</h4>
+                    </div>
+                    
+                    <div class="receipt-details">
+                        <div class="receipt-item">
+                            <span class="font-medium text-gray-600">Transaction ID:</span>
+                            <span class="font-mono" id="pdfPreviewTransactionId">-</span>
+                        </div>
+                        <div class="receipt-item">
+                            <span class="font-medium text-gray-600">Date:</span>
+                            <span id="pdfPreviewDate">-</span>
+                        </div>
+                        <div class="receipt-item">
+                            <span class="font-medium text-gray-600">From:</span>
+                            <span id="pdfPreviewFrom">-</span>
+                        </div>
+                        <div class="receipt-item">
+                            <span class="font-medium text-gray-600">To:</span>
+                            <span id="pdfPreviewTo">-</span>
+                        </div>
+                        <div class="receipt-item">
+                            <span class="font-medium text-gray-600">Amount:</span>
+                            <span class="text-green-600 font-bold" id="pdfPreviewAmount">-</span>
+                        </div>
+                        <div class="receipt-item">
+                            <span class="font-medium text-gray-600">Note:</span>
+                            <span id="pdfPreviewNote">-</span>
+                        </div>
+                        <div class="receipt-item">
+                            <span class="font-medium text-gray-600">Method:</span>
+                            <span id="pdfPreviewMethod">-</span>
+                        </div>
+                        <div class="receipt-item">
+                            <span class="font-medium text-gray-600">Status:</span>
+                            <span class="text-green-600 font-medium">Successful</span>
+                        </div>
+                    </div>
+                    
+                    <div class="receipt-footer">
+                        <p>This is an educational receipt. No real money was involved.</p>
+                        <p class="mt-1">© 2023 Fun Pay - Educational Platform</p>
+                    </div>
+                </div>
+                
+                <!-- Share Options -->
+                <div class="share-options">
+                    <button onclick="downloadPreviewPDF()" class="share-btn copy">
+                        <i class="fas fa-download"></i>
+                        <span class="text-xs mt-1">PDF</span>
+                    </button>
+                    <button onclick="shareViaWhatsApp()" class="share-btn whatsapp">
+                        <i class="fab fa-whatsapp"></i>
+                        <span class="text-xs mt-1">WhatsApp</span>
+                    </button>
+                    <button onclick="shareViaEmail()" class="share-btn email">
+                        <i class="fas fa-envelope"></i>
+                        <span class="text-xs mt-1">Email</span>
+                    </button>
+                    <button onclick="shareViaSMS()" class="share-btn sms">
+                        <i class="fas fa-sms"></i>
+                        <span class="text-xs mt-1">SMS</span>
+                    </button>
+                </div>
+                
+                <div class="mt-4 p-3 bg-blue-50 rounded-lg">
+                    <p class="text-xs text-blue-700">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        Click on any option to share or download your receipt in different formats.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- NEW: Find Payer Screen -->
     <div id="findPayer" class="screen">
         <div class="phone-container bg-white">
@@ -3046,6 +3989,20 @@
                 <div class="mb-6">
                     <label class="block text-sm font-medium text-gray-700 mb-2">Reward Description</label>
                     <input type="text" id="rewardDescription" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500" placeholder="What's this reward for?">
+                </div>
+                
+                <!-- Hide Description Toggle -->
+                <div class="mb-6">
+                    <label class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                        <div>
+                            <span class="font-medium text-gray-700">Hide description until payment</span>
+                            <p class="text-xs text-gray-500">When enabled, description will show as "Locked until payment"</p>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="rewardHideDescription">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </label>
                 </div>
                 
                 <!-- Rule Selection -->
@@ -3544,18 +4501,61 @@
                 </div>
                 
                 <div class="w-full space-y-3">
-                    <button onclick="sharePopupTransaction()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
-                        <i class="fas fa-share-alt mr-2"></i>Share Details
+           <!-- Replace the old share button with this -->
+<button onclick="shareTransactionPDF()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
+    <i class="fas fa-share-alt mr-2"></i>Share Receipt
+</button>
+                    <button onclick="downloadPopupPDF()" class="w-full bg-green-500 text-white py-3 rounded-lg font-medium hover:bg-green-600 transition">
+                        <i class="fas fa-download mr-2"></i>Download PDF
                     </button>
-                    <button onclick="downloadPopupPDF()" class="w-full bg-gray-200 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-300 transition">
-                        <i class="fas fa-download mr-2"></i>Download Receipt
-                    </button>
-                    <button onclick="showPopupAsPaymentSuccess()" class="w-full bg-green-500 text-white py-3 rounded-lg font-medium hover:bg-green-600 transition">
+                    <button onclick="showPopupAsPaymentSuccess()" class="w-full bg-purple-500 text-white py-3 rounded-lg font-medium hover:bg-purple-600 transition">
                         <i class="fas fa-redo mr-2"></i>Show as Payment Success
                     </button>
                     <button onclick="showScreen('history')" class="w-full border border-gray-300 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-50 transition">
                         Back to History
                     </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scan QR Code Screen with Image Scan Option -->
+    <div id="scanQR" class="screen">
+        <div class="phone-container bg-white">
+            <!-- Header -->
+            <div class="bg-indigo-500 text-white p-4 flex items-center">
+                <button onclick="showScreen('home')" class="mr-3">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h2 class="text-xl font-semibold">Scan QR Code</h2>
+                <!-- Image Scan Button in Header -->
+                <button onclick="showImageQRScanner()" class="ml-auto text-white">
+                    <i class="fas fa-image"></i>
+                </button>
+            </div>
+            
+            <!-- QR Scanner -->
+            <div class="p-4 relative">
+                <div id="qr-reader"></div>
+                
+                <!-- Scanner Controls -->
+                <div class="qr-scanner-controls">
+                    <button onclick="showImageQRScanner()" class="scanner-control-btn">
+                        <i class="fas fa-image"></i>
+                    </button>
+                    <button onclick="startQRScanner()" class="scanner-control-btn">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                    <button onclick="showScreen('home')" class="scanner-control-btn">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                
+                <div class="mt-4 p-3 bg-blue-50 rounded-lg">
+                    <p class="text-xs text-blue-700 text-center">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        Position the QR code within the frame to scan or use the image icon to scan from a photo.
+                    </p>
                 </div>
             </div>
         </div>
@@ -3703,11 +4703,12 @@
                 </div>
                 
                 <div class="w-full space-y-3">
-                    <button onclick="shareTransaction()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
-                        <i class="fas fa-share-alt mr-2"></i>Share
-                    </button>
-                    <button onclick="downloadPDFReceipt()" class="w-full bg-gray-200 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-300 transition">
-                        <i class="fas fa-download mr-2"></i>Download Receipt
+                   <!-- Replace the old share button with this -->
+<button onclick="shareTransactionPDF()" class="w-full bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600 transition">
+    <i class="fas fa-share-alt mr-2"></i>Share Receipt
+</button>
+                    <button onclick="downloadPDFReceipt()" class="w-full bg-green-500 text-white py-3 rounded-lg font-medium hover:bg-green-600 transition">
+                        <i class="fas fa-download mr-2"></i>Download PDF
                     </button>
                     <button onclick="showScreen('home')" class="w-full border border-gray-300 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-50 transition">
                         Done
@@ -4274,31 +5275,6 @@
                             Share this QR code to receive payments
                         </p>
                     </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Scan QR Code Screen -->
-    <div id="scanQR" class="screen">
-        <div class="phone-container bg-white">
-            <!-- Header -->
-            <div class="bg-indigo-500 text-white p-4 flex items-center">
-                <button onclick="showScreen('home')" class="mr-3">
-                    <i class="fas fa-arrow-left"></i>
-                </button>
-                <h2 class="text-xl font-semibold">Scan QR Code</h2>
-            </div>
-            
-            <!-- QR Scanner -->
-            <div class="p-4">
-                <div id="qr-reader"></div>
-                
-                <div class="mt-4 p-3 bg-blue-50 rounded-lg">
-                    <p class="text-xs text-blue-700 text-center">
-                        <i class="fas fa-info-circle mr-1"></i>
-                        Position the QR code within the frame to scan
-                    </p>
                 </div>
             </div>
         </div>
